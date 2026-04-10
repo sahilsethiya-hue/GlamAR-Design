@@ -2382,7 +2382,7 @@ function GsSpeedSelector({ value, onChange }) {
 function GsSelectField({ label, value, onChange, options }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {label && <span style={{ fontSize: 12, color: "#5a5a5a", lineHeight: "16px" }}>{label}</span>}
+      {label && <span style={{ fontSize: 14, color: "#5a5a5a", lineHeight: "20px" }}>{label}</span>}
       <div style={{ position: "relative" }}>
         <select value={value} onChange={e => onChange(e.target.value)}
           style={{ width: "100%", appearance: "none", background: "#f5f5f5", border: "1px solid #e0e0e0", borderRadius: 6, padding: "6px 32px 6px 10px", fontSize: 13, color: "#141414", cursor: "pointer", outline: "none" }}>
@@ -3131,7 +3131,7 @@ function ARSlider({ label, value, onChange, min = 0, max = 100 }) {
   const pct = ((value - min) / (max - min)) * 100;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      {label && <span style={{ fontSize: 12, color: "#5a5a5a", lineHeight: "16px" }}>{label}</span>}
+      {label && <span style={{ fontSize: 14, color: "#5a5a5a", lineHeight: "20px" }}>{label}</span>}
       <div style={{ display: "flex", alignItems: "center", gap: 12, height: 24 }}>
         <div style={{ flex: 1, position: "relative", height: 18, display: "flex", alignItems: "center" }}>
           <div style={{ position: "absolute", left: 0, right: 0, height: 2, background: "#e0e0e0", borderRadius: 8 }} />
