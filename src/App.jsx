@@ -263,7 +263,9 @@ function getEmptyMeasurementFields() {
     dimensionHeight: "",
     dimensionUnit: "mm",
     ringInnerDiameter: "",
-    ringBandWidth: "",
+    isDiamondRing: "no",
+    diamondShape: "",
+    diamondCaratSize: "",
     watchCaseDiameter: "",
     watchLugToLug: "",
     watchCaseThickness: "",
@@ -308,7 +310,9 @@ function hydrateMeasurementFields(measurements, dimension) {
     return {
       ...base,
       ringInnerDiameter: measurements.innerDiameter || "",
-      ringBandWidth: measurements.bandWidth || "",
+      isDiamondRing: measurements.isDiamondRing || "no",
+      diamondShape: measurements.diamondShape || "",
+      diamondCaratSize: measurements.diamondCaratSize || "",
     };
   }
   if (measurements?.schema === "watch") {
@@ -335,13 +339,19 @@ function hydrateMeasurementFields(measurements, dimension) {
 function buildMeasurement(schema, values) {
   if (schema === "ring") {
     const innerDiameter = (values.ringInnerDiameter || "").trim();
-    const bandWidth = (values.ringBandWidth || "").trim();
+    const isDiamondRing = values.isDiamondRing || "no";
+    const diamondShape = (values.diamondShape || "").trim();
+    const diamondCaratSize = (values.diamondCaratSize || "").trim();
     const parts = [];
     if (innerDiameter) parts.push(`Inner diameter: ${innerDiameter} mm`);
-    if (bandWidth) parts.push(`Band width: ${bandWidth}`);
+    if (isDiamondRing === "yes") {
+      parts.push("Diamond Ring");
+      if (diamondShape) parts.push(`Shape: ${diamondShape}`);
+      if (diamondCaratSize) parts.push(`Carat: ${diamondCaratSize} mm`);
+    }
     return {
       dimension: parts.join(" | "),
-      measurements: { schema: "ring", innerDiameter, bandWidth },
+      measurements: { schema: "ring", innerDiameter, isDiamondRing, diamondShape, diamondCaratSize },
     };
   }
 
@@ -1470,16 +1480,28 @@ function BeautyListing({ products, activeTab, onAddProduct, onEditProduct, onVie
 }
 
 // ─── VARIANT EDITOR (Lifestyle / Home) ───
-function VariantEditor({ variantOptions, setVariantOptions, variants, setVariants, has3D, measurementSchema }) {
+function VariantEditor({ variantOptions, setVariantOptions, variants, setVariants, has3D, measurementSchema, disabled }) {
   const [editingOption, setEditingOption] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null); // null = new, number = editing existing
   const [newValue, setNewValue] = useState("");
+  const [newColor, setNewColor] = useState("#da0e64");
+  const [newImageUrl, setNewImageUrl] = useState("");
+  const [variantOrder, setVariantOrder] = useState("");
+  const [expandedGroup, setExpandedGroup] = useState(null);
+
+  // values are objects: { label, color?, image? }
+  const getLabel = (v) => (typeof v === "string" ? v : v.label || "");
+
+  const resetNewRow = () => { setNewValue(""); setNewColor("#da0e64"); setNewImageUrl(""); };
 
   const generateVariants = (opts) => {
     if (opts.length === 0) { setVariants([]); return; }
-    const combos = opts.reduce((acc, opt) => {
-      if (acc.length === 0) return opt.values.map(v => [{ attr: opt.name, val: v }]);
+    const skuOpts = opts.filter(o => o.optionRole !== "configurator");
+    if (skuOpts.length === 0) { setVariants([]); return; }
+    const combos = skuOpts.reduce((acc, opt) => {
+      if (acc.length === 0) return opt.values.map(v => [{ attr: opt.name, val: getLabel(v), color: v.color, image: v.image }]);
       const next = [];
-      acc.forEach(c => opt.values.forEach(v => next.push([...c, { attr: opt.name, val: v }])));
+      acc.forEach(c => opt.values.forEach(v => next.push([...c, { attr: opt.name, val: getLabel(v), color: v.color, image: v.image }])));
       return next;
     }, []);
     setVariants(combos.map((combo, i) => ({
@@ -1487,17 +1509,40 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
       name: combo.map(c => c.val).join(" / "),
       attributes: combo,
       variantId: "",
+      costPrice: "",
+      sellingPrice: "",
       ...getEmptyMeasurementFields(),
-      price: "",
     })));
+    setExpandedGroup(null);
   };
 
   const doneEditing = () => {
     if (!editingOption.name.trim() || editingOption.values.length === 0) return;
-    const newOpts = [...variantOptions, { name: editingOption.name, values: editingOption.values }];
+    const updated = { name: editingOption.name, valueType: editingOption.valueType || "text", optionRole: editingOption.optionRole || "sku", values: editingOption.values };
+    const newOpts = editingIndex !== null
+      ? variantOptions.map((o, i) => i === editingIndex ? updated : o)
+      : [...variantOptions, updated];
     setVariantOptions(newOpts);
     generateVariants(newOpts);
     setEditingOption(null);
+    setEditingIndex(null);
+    resetNewRow();
+  };
+
+  const addValue = () => {
+    const type = editingOption.valueType || "text";
+    let newVal;
+    if (type === "color") {
+      newVal = { label: newValue.trim() || newColor, color: newColor };
+    } else if (type === "image") {
+      if (!newImageUrl) return;
+      newVal = { label: newValue.trim() || "Image", image: newImageUrl };
+    } else {
+      if (!newValue.trim()) return;
+      newVal = { label: newValue.trim() };
+    }
+    setEditingOption({ ...editingOption, values: [...editingOption.values, newVal] });
+    resetNewRow();
   };
 
   const removeOption = (idx) => {
@@ -1508,119 +1553,275 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
 
   const updateVariant = (id, key, val) => setVariants(variants.map(v => v.id === id ? { ...v, [key]: val } : v));
 
+  const renderSwatch = (v, size = 36) => {
+    if (v?.color) return <div style={{ width: size, height: size, borderRadius: size * 0.22, background: v.color, flexShrink: 0, border: "1px solid rgba(0,0,0,0.08)" }} />;
+    if (v?.image) return <img src={v.image} alt="" style={{ width: size, height: size, borderRadius: size * 0.22, objectFit: "cover", flexShrink: 0 }} />;
+    return <div style={{ width: size, height: size, borderRadius: size * 0.22, background: "#f0f0f0", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><Image size={size * 0.4} color="#ccc" /></div>;
+  };
+
+  // Variant order options
+  const orderOptions = variantOptions.filter(o => o.optionRole !== "configurator").map(o => o.name);
+
+  // Group variants for display
+  const groupedVariants = (() => {
+    if (!variantOrder || variantOptions.filter(o => o.optionRole !== "configurator").length <= 1) return null;
+    const map = {};
+    variants.forEach(v => {
+      const attr = v.attributes.find(a => a.attr === variantOrder);
+      const key = attr ? attr.val : v.name;
+      if (!map[key]) map[key] = { key, variants: [], swatch: attr ? { color: attr.color, image: attr.image } : null };
+      map[key].variants.push(v);
+    });
+    return Object.values(map);
+  })();
+
+  const renderVariantFields = (v) => (
+    <div style={{ padding: "16px 20px 20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <Inp label="SKU ID" value={v.variantId} onChange={val => updateVariant(v.id, "variantId", val)} placeholder="e.g. VAR-001" />
+        <Inp label="Cost Price" value={v.costPrice || ""} onChange={val => updateVariant(v.id, "costPrice", val)} placeholder="Rs. 0.00" />
+        <Inp label="Selling Price" value={v.sellingPrice || ""} onChange={val => updateVariant(v.id, "sellingPrice", val)} placeholder="Rs. 0.00" />
+      </div>
+      {measurementSchema === "dimension" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 160px", gap: 14 }}>
+          <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
+          <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
+          <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
+          <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
+        </div>
+      )}
+      {measurementSchema === "ring" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
+          <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
+          {(v.isDiamondRing === "yes") && <>
+            <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
+            <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
+          </>}
+        </div>
+      )}
+      {measurementSchema === "watch" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
+          <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
+          <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
+          <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
+        </div>
+      )}
+      {has3D && <div style={{ marginTop: 14 }}><UBox small label="Upload 3D model" /></div>}
+    </div>
+  );
+
   return (
     <div style={{ ...S.card, marginBottom: 22, overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 24px", borderBottom: editingOption || variants.length > 0 || variantOptions.length > 0 ? "1px solid #f2f2f2" : "none" }}>
         <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: -0.2 }}>Select variant</div>
         {!editingOption && !variantOptions.length && !variants.length && (
-          <button className="glamar-btn glamar-btn-primary" style={{ padding: "0 16px" }} onClick={() => setEditingOption({ name: "", values: [] })}>
+          <button className="glamar-btn glamar-btn-primary" style={{ padding: "0 16px", opacity: disabled ? 0.4 : 1, cursor: disabled ? "not-allowed" : "pointer" }} disabled={disabled} onClick={() => !disabled && setEditingOption({ name: "", valueType: "color", optionRole: "sku", values: [] })}>
             <Plus size={14} /> Add Variant
           </button>
         )}
       </div>
-      {(editingOption || variantOptions.length > 0 || variants.length > 0) && <div style={{ padding: "16px 24px 20px" }}>
 
-        {variantOptions.map((opt, oi) => (
-          <div key={oi} style={{ background: "#fafafa", borderRadius: 10, padding: 16, border: "1px solid #f0f0f0", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div><span style={{ fontSize: 13, fontWeight: 600 }}>{opt.name}</span><span style={{ fontSize: 12.5, color: "#999", marginLeft: 10 }}>{opt.values.join(", ")}</span></div>
-            <button onClick={() => removeOption(oi)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={14} color="#999" /></button>
+      {(editingOption || variantOptions.length > 0 || variants.length > 0) && <div style={{ padding: "16px 24px 4px" }}>
+
+        {/* Saved options row */}
+        {variantOptions.map((opt, oi) => editingIndex === oi ? null : (
+          <div key={oi} onClick={() => { setEditingOption({ ...opt }); setEditingIndex(oi); resetNewRow(); }}
+            style={{ background: "#fafafa", borderRadius: 12, padding: "14px 18px", border: "1px solid #ebebeb", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{opt.name}</span>
+              {opt.optionRole === "configurator" && <span style={{ fontSize: 11, background: "#f0f0f0", borderRadius: 4, padding: "1px 6px", color: "#888" }}>Configurator</span>}
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                {opt.values.map((v, vi) => (
+                  v.color
+                    ? <div key={vi} style={{ width: 16, height: 16, borderRadius: "50%", background: v.color, border: "1px solid rgba(0,0,0,0.1)", flexShrink: 0 }} />
+                    : v.image
+                    ? <img key={vi} src={v.image} alt="" style={{ width: 16, height: 16, borderRadius: 4, objectFit: "cover", flexShrink: 0 }} />
+                    : <span key={vi} style={{ fontSize: 12, color: "#999" }}>{getLabel(v)}</span>
+                ))}
+              </div>
+            </div>
+            <button onClick={e => { e.stopPropagation(); removeOption(oi); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, flexShrink: 0 }}><X size={14} color="#bbb" /></button>
           </div>
         ))}
 
+        {/* Editing form */}
         {editingOption && (
           <div style={{ background: "#fafafa", borderRadius: 12, padding: 22, border: "1px solid #eaeaea", marginBottom: 16 }}>
-            <div style={{ marginBottom: 16 }}>
+            {/* Option name + type dropdown */}
+            <div style={{ marginBottom: 14 }}>
               <label style={S.label}>Option name</label>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <GripVertical size={16} color="#ccc" />
-                <input style={{ ...S.input, background: "#fff" }} value={editingOption.name} onChange={e => setEditingOption({ ...editingOption, name: e.target.value })} placeholder="e.g. Color, Size, Material"
+                <input style={{ ...S.input, background: "#fff", flex: 1 }} value={editingOption.name}
+                  onChange={e => setEditingOption({ ...editingOption, name: e.target.value })}
+                  placeholder="e.g. Color, Size, Material"
                   onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                {/* Type dropdown */}
+                <div style={{ position: "relative" }}>
+                  <select value={editingOption.valueType || "text"}
+                    onChange={e => { setEditingOption({ ...editingOption, valueType: e.target.value, values: [] }); resetNewRow(); }}
+                    style={{ appearance: "none", background: "#fff", border: "1px solid #d9d9d9", borderRadius: 10, padding: "0 28px 0 12px", height: 36, fontSize: 13, fontWeight: 500, color: "#333", cursor: "pointer", outline: "none" }}>
+                    <option value="color">Color</option>
+                    <option value="image">Image</option>
+                    <option value="text">Text</option>
+                  </select>
+                  <ChevronDown size={13} color="#888" style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                </div>
               </div>
             </div>
+
+            {/* Option values */}
             <div style={{ marginBottom: 16 }}>
               <label style={S.label}>Option values</label>
               {editingOption.values.map((v, vi) => (
                 <div key={vi} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <GripVertical size={16} color="#ccc" />
-                  <input style={{ ...S.input, background: "#fff" }} value={v} readOnly />
-                  <button onClick={() => setEditingOption({ ...editingOption, values: editingOption.values.filter((_, i) => i !== vi) })} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={14} color="#999" /></button>
+                  {v.color && (
+                    <label style={{ width: 36, height: 36, borderRadius: 9, background: v.color, flexShrink: 0, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative" }} title="Pick color">
+                      <input type="color" value={v.color} onChange={e => setEditingOption({ ...editingOption, values: editingOption.values.map((val, i) => i === vi ? { ...val, color: e.target.value } : val) })}
+                        style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", border: "none", padding: 0, opacity: 0, cursor: "pointer" }} />
+                    </label>
+                  )}
+                  {v.image && <img src={v.image} alt="" style={{ width: 36, height: 36, borderRadius: 9, objectFit: "cover", flexShrink: 0 }} />}
+                  <input style={{ ...S.input, background: "#fff" }} value={getLabel(v)}
+                    onChange={e => setEditingOption({ ...editingOption, values: editingOption.values.map((val, i) => i === vi ? { ...val, label: e.target.value } : val) })}
+                    onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                  <button onClick={() => setEditingOption({ ...editingOption, values: editingOption.values.filter((_, i) => i !== vi) })} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={14} color="#bbb" /></button>
                 </div>
               ))}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 16 }} />
-                <input style={{ ...S.input, background: "#fff" }} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="Add another value"
-                  onKeyDown={e => { if (e.key === "Enter" && newValue.trim()) { setEditingOption({ ...editingOption, values: [...editingOption.values, newValue.trim()] }); setNewValue(""); } }}
-                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-              </div>
+              {/* Add row */}
+              {(editingOption.valueType === "color") ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 16 }} />
+                  <label style={{ width: 36, height: 36, borderRadius: 9, background: newColor, flexShrink: 0, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative" }} title="Pick color">
+                    <input type="color" value={newColor} onChange={e => setNewColor(e.target.value)}
+                      style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", border: "none", padding: 0, opacity: 0, cursor: "pointer" }} />
+                  </label>
+                  <input style={{ ...S.input, background: "#fff" }} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="Add another value"
+                    onKeyDown={e => { if (e.key === "Enter") addValue(); }}
+                    onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                </div>
+              ) : (editingOption.valueType === "image") ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 16 }} />
+                  <label style={{ width: 36, height: 36, borderRadius: 9, border: "1px dashed #d0d0d0", background: newImageUrl ? "transparent" : "#fafafa", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, overflow: "hidden" }}>
+                    {newImageUrl ? <img src={newImageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Upload size={12} color="#bbb" />}
+                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) setNewImageUrl(URL.createObjectURL(f)); }} />
+                  </label>
+                  <input style={{ ...S.input, background: "#fff" }} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="Add another value"
+                    onKeyDown={e => { if (e.key === "Enter") addValue(); }}
+                    onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 16 }} />
+                  <input style={{ ...S.input, background: "#fff" }} value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="Add another value"
+                    onKeyDown={e => { if (e.key === "Enter" && newValue.trim()) addValue(); }}
+                    onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                </div>
+              )}
             </div>
+
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <button
-                onClick={() => setEditingOption(null)}
-                style={{
-                  background: "#f5f5f5",
-                  color: "#ff3b30",
-                  border: "none",
-                  borderRadius: 12,
-                  height: 32,
-                  padding: "0 16px",
-                  fontSize: 14,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                Delete
+              <button onClick={() => { if (editingIndex !== null) { removeOption(editingIndex); } setEditingOption(null); setEditingIndex(null); resetNewRow(); }}
+                style={{ background: "#f5f5f5", color: "#ff3b30", border: "none", borderRadius: 12, height: 32, padding: "0 16px", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                {editingIndex !== null ? "Delete" : "Cancel"}
               </button>
-              <button
-                onClick={doneEditing}
-                className="glamar-btn glamar-btn-primary"
-              >
-                Done
-              </button>
+              <button onClick={doneEditing} className="glamar-btn glamar-btn-primary">Done</button>
             </div>
           </div>
         )}
 
+        {/* Variant list */}
         {variants.length > 0 && !editingOption && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12.5, color: "#999", marginBottom: 12 }}>{variants.length} variant{variants.length !== 1 ? "s" : ""} generated</div>
-            {variants.map(v => (
-              <div key={v.id} style={{ border: "1px solid #eaeaea", borderRadius: 12, padding: 20, marginBottom: 12, background: "#fff" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 10, background: "#f2f2f2", display: "flex", alignItems: "center", justifyContent: "center" }}><Image size={18} color="#ccc" /></div>
-                  <div><div style={{ fontSize: 14, fontWeight: 600 }}>{v.name}</div><div style={{ fontSize: 11.5, color: "#999" }}>{v.attributes.map(a => a.attr).join(", ")}</div></div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, color: "#999" }}>{variants.length} variant{variants.length !== 1 ? "s" : ""} generated</div>
+              {orderOptions.length > 1 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12.5, color: "#999" }}>Variant order</span>
+                  <div style={{ position: "relative" }}>
+                    <select value={variantOrder} onChange={e => { setVariantOrder(e.target.value); setExpandedGroup(null); }}
+                      style={{ appearance: "none", background: "#fff", border: "1px solid #e0e0e0", borderRadius: 20, padding: "0 30px 0 12px", height: 32, fontSize: 13, fontWeight: 500, color: "#333", cursor: "pointer", outline: "none" }}>
+                      {orderOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <ChevronDown size={12} color="#888" style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                  </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-                  <Inp label="SKU ID" value={v.variantId} onChange={val => updateVariant(v.id, "variantId", val)} placeholder="e.g. VAR-001" />
-                  <Inp label="Price" value={v.price} onChange={val => updateVariant(v.id, "price", val)} placeholder="Rs. 0.00" />
-                </div>
-                {measurementSchema === "dimension" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 160px", gap: 14 }}>
-                    <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
-                    <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
-                    <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
-                    <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
+              )}
+            </div>
+
+            {groupedVariants ? (
+              // Grouped view — left: group identity, right: sub-combination chips
+              groupedVariants.map(group => {
+                const activeChip = expandedGroup?.startsWith(group.key + "::") ? expandedGroup : null;
+                const activeVariant = activeChip ? group.variants.find(v => v.id === activeChip.split("::")[1]) : null;
+                return (
+                  <div key={group.key} style={{ border: "1px solid #eaeaea", borderRadius: 14, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
+                    <div style={{ display: "flex", minHeight: 80 }}>
+                      {/* Left: group identity */}
+                      <div style={{ width: 140, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: "16px 12px", background: "#fafafa", borderRight: "1px solid #f0f0f0" }}>
+                        {renderSwatch(group.swatch, 44)}
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#222", textAlign: "center", lineHeight: 1.3 }}>{group.key}</div>
+                        <div style={{ fontSize: 11, color: "#aaa", fontWeight: 500 }}>{group.variants.length} variant{group.variants.length !== 1 ? "s" : ""}</div>
+                      </div>
+                      {/* Right: sub-combination chips */}
+                      <div style={{ flex: 1, padding: "14px 16px", display: "flex", flexWrap: "wrap", alignContent: "flex-start", gap: 8 }}>
+                        {group.variants.map(v => {
+                          const subLabel = v.attributes.filter(a => a.attr !== variantOrder).map(a => a.val).join(" / ") || v.name;
+                          const subSwatch = v.attributes.find(a => (a.attr !== variantOrder) && (a.color || a.image));
+                          const isActive = activeChip === group.key + "::" + v.id;
+                          return (
+                            <button key={v.id}
+                              onClick={() => setExpandedGroup(isActive ? null : group.key + "::" + v.id)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px 5px 6px", borderRadius: 20, border: isActive ? "1.5px solid #f43f5e" : "1.5px solid #e8e8e8", background: isActive ? "#fff0f3" : "#f7f7f7", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: isActive ? "#f43f5e" : "#333", transition: "all 0.15s" }}>
+                              {subSwatch ? renderSwatch(subSwatch, 18) : null}
+                              {subLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* Expanded variant fields */}
+                    {activeVariant && (
+                      <div style={{ borderTop: "1px solid #f0f0f0", background: "#fafafa" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 18px 0" }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>{activeVariant.name}</div>
+                          <div style={{ fontSize: 11.5, color: "#bbb" }}>{activeVariant.attributes.map(a => `${a.attr}: ${a.val}`).join(" · ")}</div>
+                        </div>
+                        {renderVariantFields(activeVariant)}
+                      </div>
+                    )}
                   </div>
-                )}
-                {measurementSchema === "ring" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                    <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
-                    <Inp label="Band width (optional)" value={v.ringBandWidth || ""} onChange={val => updateVariant(v.id, "ringBandWidth", val)} placeholder="e.g. 2" />
+                );
+              })
+            ) : (
+              // Flat list — compact card per variant
+              variants.map(v => {
+                const isOpen = expandedGroup === v.id;
+                const subLabel = v.attributes.map(a => a.val).join(" / ");
+                const swatchAttr = v.attributes.find(a => a.color || a.image) ?? v.attributes[0];
+                return (
+                  <div key={v.id} style={{ border: "1px solid #eaeaea", borderRadius: 12, background: "#fff", marginBottom: 8, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }} onClick={() => setExpandedGroup(isOpen ? null : v.id)}>
+                      {renderSwatch(swatchAttr, 36)}
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#222" }}>{v.name}</div>
+                        {subLabel && <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 1 }}>{subLabel}</div>}
+                      </div>
+                      <div style={{ color: "#bbb" }}>{isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</div>
+                    </div>
+                    {isOpen && (
+                      <div style={{ borderTop: "1px solid #f0f0f0" }}>
+                        {renderVariantFields(v)}
+                      </div>
+                    )}
                   </div>
-                )}
-                {measurementSchema === "watch" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                    <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
-                    <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
-                    <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
-                    <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
-                  </div>
-                )}
-                {has3D && <div style={{ marginTop: 14 }}><UBox small label="Upload 3D model" /></div>}
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         )}
 
@@ -1629,14 +1830,14 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 24px 20px" }}>
           <div>
             {(variantOptions.length > 0 || variants.length > 0) && (
-              <button onClick={() => { setVariantOptions([]); setVariants([]); setEditingOption(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 12.5, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
+              <button onClick={() => { setVariantOptions([]); setVariants([]); setEditingOption(null); resetNewRow(); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 12.5, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
                 <IcTrash color="#dc2626" /> Remove all
               </button>
             )}
           </div>
           <div>
             {!editingOption && (
-              <button className="glamar-btn glamar-btn-primary" style={{ padding: "0 16px" }} onClick={() => setEditingOption({ name: "", values: [] })}>
+              <button className="glamar-btn glamar-btn-primary" style={{ padding: "0 16px", opacity: disabled ? 0.4 : 1, cursor: disabled ? "not-allowed" : "pointer" }} disabled={disabled} onClick={() => !disabled && setEditingOption({ name: "", valueType: "color", optionRole: "sku", values: [] })}>
                 <Plus size={14} /> Add Variant
               </button>
             )}
@@ -1969,7 +2170,11 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
                     {measurementSchema === "ring" && (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                         <Inp label="Inner diameter (mm)" value={form.ringInnerDiameter || ""} onChange={v => updateForm("ringInnerDiameter", v)} placeholder="e.g. 18" />
-                        <Inp label="Band width (optional)" value={form.ringBandWidth || ""} onChange={v => updateForm("ringBandWidth", v)} placeholder="e.g. 2" />
+                        <DD label="Diamond Ring" value={form.isDiamondRing || "no"} onChange={v => updateForm("isDiamondRing", v)} options={["yes", "no"]} placeholder="Select" />
+                        {form.isDiamondRing === "yes" && <>
+                          <Inp label="Diamond Shape" value={form.diamondShape || ""} onChange={v => updateForm("diamondShape", v)} placeholder="e.g. Round, Princess" />
+                          <Inp label="Carat Size (mm)" value={form.diamondCaratSize || ""} onChange={v => updateForm("diamondCaratSize", v)} placeholder="e.g. 6.5" />
+                        </>}
                       </div>
                     )}
                     {measurementSchema === "watch" && (
@@ -2096,7 +2301,7 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
           )}
 
           {/* ── Variants ── */}
-          <VariantEditor variantOptions={variantOptions} setVariantOptions={setVariantOptions} variants={variants} setVariants={setVariants} has3D={has3D} measurementSchema={measurementSchema} />
+          <VariantEditor variantOptions={variantOptions} setVariantOptions={setVariantOptions} variants={variants} setVariants={setVariants} has3D={has3D} measurementSchema={measurementSchema} disabled={!form.category} />
         </div>
       </div>
     </div>
@@ -2316,7 +2521,7 @@ function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
           </div>
 
           {/* ── Variants ── */}
-          <VariantEditor variantOptions={variantOptions} setVariantOptions={setVariantOptions} variants={variants} setVariants={setVariants} has3D={false} measurementSchema={null} />
+          <VariantEditor variantOptions={variantOptions} setVariantOptions={setVariantOptions} variants={variants} setVariants={setVariants} has3D={false} measurementSchema={null} disabled={!form.category} />
 
         </div>
       </div>
