@@ -416,30 +416,84 @@ function getBeautyInitialForm(editProduct) {
   };
 }
 
+function hydrateVariantAttributes(variant, index) {
+  const fallbackName = variant.name || `Variant ${index + 1}`;
+  if (variant.attributes?.length) {
+    return variant.attributes.map((attr, attrIndex) => (
+      attrIndex === 0 && !attr.color && !attr.image && (variant.color || variant.image)
+        ? { ...attr, color: variant.color || undefined, image: variant.image || undefined }
+        : attr
+    ));
+  }
+  return [{
+    attr: (variant.color || variant.image) ? "Color" : "Variant",
+    val: fallbackName,
+    color: variant.color || undefined,
+    image: variant.image || undefined,
+  }];
+}
+
+function mapVariantOptionsForEditor(product) {
+  if (product?.variantOptions?.length) return product.variantOptions;
+
+  const optionMap = new Map();
+  (product?.variants || []).forEach((variant, index) => {
+    hydrateVariantAttributes(variant, index).forEach((attr) => {
+      const optionName = attr.attr || "Variant";
+      const valueType = attr.image ? "image" : attr.color ? "color" : "text";
+      if (!optionMap.has(optionName)) {
+        optionMap.set(optionName, { name: optionName, valueType, optionRole: "sku", values: [] });
+      }
+      const option = optionMap.get(optionName);
+      if (valueType === "image") option.valueType = "image";
+      else if (valueType === "color" && option.valueType === "text") option.valueType = "color";
+
+      const exists = option.values.some((value) => value.label === attr.val);
+      if (!exists) {
+        option.values.push({
+          label: attr.val,
+          ...(attr.color ? { color: attr.color } : {}),
+          ...(attr.image ? { image: attr.image } : {}),
+        });
+      }
+    });
+  });
+
+  return Array.from(optionMap.values());
+}
+
 function mapGeneralVariantsForEditor(product) {
   return (product?.variants || []).map((variant, index) => {
     const parsedMeasurements = hydrateMeasurementFields(variant.measurements, variant.dimension || "");
+    const hydratedAttributes = hydrateVariantAttributes(variant, index);
     return {
       id: variant.id || `var-${Date.now()}-${index}`,
       name: variant.name || `Variant ${index + 1}`,
-      attributes: variant.attributes || [{ attr: "Variant", val: variant.name || `Variant ${index + 1}` }],
+      attributes: hydratedAttributes,
       variantId: variant.variantId || "",
       ...parsedMeasurements,
-      price: variant.price || "",
+      costPrice: variant.costPrice || "",
+      sellingPrice: variant.sellingPrice || variant.price || "",
+      price: variant.sellingPrice || variant.price || "",
       color: variant.color || "",
     };
   });
 }
 
 function mapBeautyVariantsForEditor(product) {
-  return (product?.variants || []).map((variant, index) => ({
-    id: variant.id || `var-${Date.now()}-${index}`,
-    name: variant.name || `Variant ${index + 1}`,
-    attributes: variant.attributes || [{ attr: "Variant", val: variant.name || `Variant ${index + 1}` }],
-    variantId: variant.variantId || "",
-    price: variant.price || "",
-    color: variant.color || "",
-  }));
+  return (product?.variants || []).map((variant, index) => {
+    const hydratedAttributes = hydrateVariantAttributes(variant, index);
+    return {
+      id: variant.id || `var-${Date.now()}-${index}`,
+      name: variant.name || `Variant ${index + 1}`,
+      attributes: hydratedAttributes,
+      variantId: variant.variantId || "",
+      costPrice: variant.costPrice || "",
+      sellingPrice: variant.sellingPrice || variant.price || "",
+      price: variant.sellingPrice || variant.price || "",
+      color: variant.color || "",
+    };
+  });
 }
 
 // ─── STYLES ───
@@ -677,7 +731,7 @@ const IcNavSettings = () => (<svg width="24" height="24" viewBox="0 0 24 24" fil
 const IcL2Lifestyle = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M17.5003 15C17.5003 15.4583 17.1253 15.8333 16.667 15.8333H15.6837C15.342 16.8 14.4253 17.5 13.3337 17.5C12.242 17.5 11.3337 16.8 10.9837 15.8333H9.00866C8.66699 16.8 7.75033 17.5 6.65866 17.5C5.56699 17.5 4.65866 16.8 4.30866 15.8333H3.32533C2.86699 15.8333 2.49199 15.4583 2.49199 15C2.49199 14.5417 2.86699 14.1667 3.32533 14.1667H4.30866C4.65033 13.2 5.56699 12.5 6.65866 12.5C7.75033 12.5 8.65866 13.2 9.00866 14.1667H10.9837C11.3253 13.2 12.242 12.5 13.3337 12.5C14.4253 12.5 15.3337 13.2 15.6837 14.1667H16.667C17.1253 14.1667 17.5003 14.5417 17.5003 15ZM17.5003 9.16667H15.8337L14.542 4.01667C14.317 3.125 13.517 2.5 12.6003 2.5C12.167 2.5 11.7587 2.65833 11.4087 2.9C11.0087 3.175 10.5253 3.33333 10.0003 3.33333C9.47533 3.33333 8.99199 3.175 8.59199 2.9C8.23366 2.65833 7.83366 2.5 7.40033 2.5C6.48366 2.5 5.68366 3.125 5.45866 4.01667L4.16699 9.16667H2.50033C2.04199 9.16667 1.66699 9.54167 1.66699 10C1.66699 10.4583 2.04199 10.8333 2.50033 10.8333H17.5003C17.9587 10.8333 18.3337 10.4583 18.3337 10C18.3337 9.54167 17.9587 9.16667 17.5003 9.16667Z" fill="#5a5a5a"/></svg>);
 const IcL2Beauty = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.33301 10H8.33301V15.8333C8.33301 16.75 7.58301 17.5 6.66634 17.5H4.99967C4.08301 17.5 3.33301 16.75 3.33301 15.8333V10ZM7.49967 3.68333C7.49967 2.94167 6.59967 2.56667 6.07467 3.09167L4.40801 4.75833C4.24967 4.91667 4.16634 5.125 4.16634 5.35V8.34167H7.49967V3.68333ZM11.6663 15.8417C11.6663 16.7583 12.4163 17.5083 13.333 17.5083C14.2497 17.5083 14.9997 16.7583 14.9997 15.8417V10.0083H11.6663V15.8417ZM17.208 3.69167C16.408 2.95 14.508 2.5 13.3247 2.5C12.1413 2.5 10.2413 2.95833 9.44134 3.7C9.18301 3.94167 9.09967 4.325 9.24134 4.65L11.658 8.33333H14.9913L17.408 4.64167C17.5497 4.31667 17.4663 3.93333 17.208 3.69167Z" fill="#5a5a5a"/></svg>);
 const IcL2HomeDecor = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5272 10.412V15.9732C12.5272 16.9001 11.7689 17.6584 10.842 17.6584H9.67082C9.20739 17.6584 8.82822 17.2792 8.82822 16.8158V13.4454C8.82822 12.982 8.44905 12.6028 7.98562 12.6028H6.30041C5.83698 12.6028 5.45781 12.982 5.45781 13.4454V16.8158C5.45781 17.2792 5.07864 17.6584 4.61521 17.6584H3.44399C2.51713 17.6584 1.75879 16.9001 1.75879 15.9732V10.412C1.75879 9.88962 2.01157 9.38406 2.43287 9.07229L6.13189 6.29171C6.73014 5.8367 7.55589 5.8367 8.15414 6.29171L11.8532 9.07229C12.2829 9.38406 12.5272 9.88962 12.5272 10.412ZM18.4255 3.73862V15.9816C18.4255 16.9085 17.6671 17.6668 16.7403 17.6668H15.055C14.5916 17.6668 14.2124 17.2877 14.2124 16.8242V10.4205C14.2124 9.35035 13.6985 8.33923 12.8643 7.73256L8.87035 4.7329C8.55859 4.49697 8.37321 4.13465 8.37321 3.73862C8.37321 3.05612 8.92933 2.5 9.61184 2.5H17.1784C17.8609 2.5 18.417 3.05612 18.417 3.73862H18.4255Z" fill="#5a5a5a"/></svg>);
-const IcL2LooksBuilder = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6.43972 12.831C6.1973 12.831 6.00033 12.7443 5.83366 12.5709C5.66699 12.3974 5.58366 12.1925 5.58366 11.9402C5.58366 11.688 5.66699 11.483 5.83366 11.3096C6.00033 11.1362 6.1973 11.0495 6.43972 11.0495C6.68215 11.0495 6.87911 11.1362 7.04578 11.3096C7.21245 11.483 7.29578 11.688 7.29578 11.9402C7.29578 12.1925 7.21245 12.3974 7.04578 12.5709C6.87911 12.7443 6.68215 12.831 6.43972 12.831ZM10.5306 12.831C10.2882 12.831 10.0912 12.7443 9.92457 12.5709C9.7579 12.3974 9.67457 12.1925 9.67457 11.9402C9.67457 11.688 9.7579 11.483 9.92457 11.3096C10.0912 11.1362 10.2882 11.0495 10.5306 11.0495C10.7731 11.0495 10.97 11.1362 11.1367 11.3096C11.3034 11.483 11.3867 11.688 11.3867 11.9402C11.3867 12.1925 11.3034 12.3974 11.1367 12.5709C10.97 12.7443 10.7731 12.831 10.5306 12.831ZM8.48517 18.3333C7.5382 18.3333 6.65184 18.1441 5.82609 17.7736C5.00033 17.4031 4.27306 16.8986 3.65942 16.2601C3.04578 15.6216 2.56093 14.8727 2.20487 14.0056C1.84881 13.1384 1.66699 12.224 1.66699 11.2386C1.66699 10.2533 1.84881 9.33884 2.20487 8.47171C2.56093 7.60459 3.04578 6.8557 3.65942 6.21718C4.27306 5.57866 4.99275 5.07415 5.82609 4.70365C6.65942 4.33315 7.5382 4.14395 8.48517 4.14395C9.43214 4.14395 10.3109 4.33315 11.1443 4.70365C11.9776 5.07415 12.6973 5.57866 13.3109 6.21718C13.9246 6.8557 14.4094 7.60459 14.7655 8.47171C15.1215 9.33884 15.3034 10.2612 15.3034 11.2386C15.3034 12.2161 15.1215 13.1463 14.7655 14.0056C14.4094 14.8648 13.9246 15.6216 13.3109 16.2601C12.6973 16.8986 11.9776 17.4031 11.1443 17.7736C10.3109 18.1441 9.42457 18.3333 8.48517 18.3333Z" fill="#5a5a5a"/><path d="M16.2959 4.07291L15.7884 4.27787C15.2202 4.50647 14.7808 4.97945 14.5762 5.57067L14.3793 6.14613C14.3414 6.26438 14.1747 6.26438 14.1368 6.14613L13.9399 5.57067C13.7429 4.97945 13.2959 4.50647 12.7277 4.27787L12.2202 4.07291C12.1141 4.03349 12.1141 3.87583 12.2202 3.82854L12.7277 3.62358C13.2959 3.39497 13.7353 2.92199 13.9399 2.33077L14.1368 1.75531C14.1747 1.63706 14.3414 1.63706 14.3793 1.75531L14.5762 2.33077C14.7732 2.92199 15.2202 3.39497 15.7884 3.62358L16.2959 3.82854C16.402 3.86795 16.402 4.02561 16.2959 4.07291Z" fill="#5a5a5a"/><path d="M18.2769 6.4811L17.9099 6.62208C17.5052 6.78185 17.1852 7.1108 17.0441 7.51494L16.9029 7.90967C16.8747 7.99426 16.7617 7.99426 16.7335 7.90967L16.5923 7.51494C16.4512 7.1108 16.1312 6.78185 15.7265 6.62208L15.3595 6.4811C15.2842 6.4529 15.2842 6.34012 15.3595 6.31193L15.7265 6.17095C16.1312 6.01118 16.4512 5.68223 16.5923 5.27809L16.7335 4.88336C16.7617 4.79877 16.8747 4.79877 16.9029 4.88336L17.0441 5.27809C17.1852 5.68223 17.5052 6.01118 17.9099 6.17095L18.2769 6.31193C18.3522 6.34012 18.3522 6.4529 18.2769 6.4811Z" fill="#5a5a5a"/></svg>);
+const IcL2LooksBuilder = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6.43948 12.8311C6.19705 12.8311 6.00008 12.7444 5.83341 12.571C5.66675 12.3976 5.58342 12.1926 5.58342 11.9404C5.58342 11.6881 5.66675 11.4831 5.83341 11.3097C6.00008 11.1363 6.19705 11.0496 6.43948 11.0496C6.6819 11.0496 6.87887 11.1363 7.04553 11.3097C7.2122 11.4831 7.29554 11.6881 7.29554 11.9404C7.29554 12.1926 7.2122 12.3976 7.04553 12.571C6.87887 12.7444 6.6819 12.8311 6.43948 12.8311ZM10.5304 12.8311C10.288 12.8311 10.091 12.7444 9.92432 12.571C9.75766 12.3976 9.67432 12.1926 9.67432 11.9404C9.67432 11.6881 9.75766 11.4831 9.92432 11.3097C10.091 11.1363 10.288 11.0496 10.5304 11.0496C10.7728 11.0496 10.9698 11.1363 11.1364 11.3097C11.3031 11.4831 11.3864 11.6881 11.3864 11.9404C11.3864 12.1926 11.3031 12.3976 11.1364 12.571C10.9698 12.7444 10.7728 12.8311 10.5304 12.8311ZM8.48493 16.9145C10.0077 16.9145 11.2955 16.3627 12.3561 15.267C13.4167 14.1712 13.9395 12.8232 13.9395 11.2388C13.9395 10.955 13.9243 10.6791 13.8864 10.4111C13.8486 10.143 13.788 9.89077 13.6971 9.63852C13.4546 9.6937 13.2198 9.741 12.9774 9.77253C12.7349 9.80406 12.4849 9.81983 12.2274 9.81983C11.1895 9.81983 10.2122 9.59122 9.29554 9.12612C8.37887 8.66103 7.59099 8.02251 6.93947 7.19479C6.57584 8.1171 6.05311 8.92117 5.37887 9.5991C4.70463 10.277 3.91675 10.7894 3.01523 11.1363V11.2466C3.01523 12.8311 3.54554 14.1712 4.59857 15.2749C5.6516 16.3785 6.94705 16.9224 8.46978 16.9224L8.48493 16.9145ZM8.48493 18.3335C7.53796 18.3335 6.6516 18.1443 5.82584 17.7738C5.00009 17.4033 4.27281 16.8987 3.65918 16.2602C3.04554 15.6217 2.56069 14.8728 2.20463 14.0057C1.84857 13.1386 1.66675 12.2241 1.66675 11.2388C1.66675 10.2534 1.84857 9.33896 2.20463 8.47184C2.56069 7.60471 3.04554 6.85582 3.65918 6.2173C4.27281 5.57878 4.99251 5.07427 5.82584 4.70377C6.65918 4.33327 7.53796 4.14408 8.48493 4.14408C9.4319 4.14408 10.3107 4.33327 11.144 4.70377C11.9774 5.07427 12.6971 5.57878 13.3107 6.2173C13.9243 6.85582 14.4092 7.60471 14.7652 8.47184C15.1213 9.33896 15.3031 10.2613 15.3031 11.2388C15.3031 12.2163 15.1213 13.1464 14.7652 14.0057C14.4092 14.8649 13.9243 15.6217 13.3107 16.2602C12.6971 16.8987 11.9774 17.4033 11.144 17.7738C10.3107 18.1443 9.42432 18.3335 8.48493 18.3335Z" fill="#5A5A5A"/><path d="M16.2957 4.07303L15.7881 4.27799C15.2199 4.50659 14.7805 4.97957 14.576 5.5708L14.379 6.14626C14.3411 6.2645 14.1745 6.2645 14.1366 6.14626L13.9396 5.5708C13.7427 4.97957 13.2957 4.50659 12.7275 4.27799L12.2199 4.07303C12.1139 4.03361 12.1139 3.87596 12.2199 3.82866L12.7275 3.6237C13.2957 3.39509 13.7351 2.92211 13.9396 2.33089L14.1366 1.75543C14.1745 1.63719 14.3411 1.63719 14.379 1.75543L14.576 2.33089C14.773 2.92211 15.2199 3.39509 15.7881 3.6237L16.2957 3.82866C16.4017 3.86807 16.4017 4.02573 16.2957 4.07303Z" fill="#5A5A5A"/><path d="M18.2767 6.48122L17.9096 6.6222C17.505 6.78197 17.185 7.11092 17.0438 7.51506L16.9027 7.90979C16.8744 7.99438 16.7615 7.99438 16.7333 7.90979L16.5921 7.51506C16.4509 7.11092 16.131 6.78197 15.7263 6.6222L15.3593 6.48122C15.284 6.45303 15.284 6.34025 15.3593 6.31205L15.7263 6.17107C16.131 6.0113 16.4509 5.68235 16.5921 5.27822L16.7333 4.88348C16.7615 4.79889 16.8744 4.79889 16.9027 4.88348L17.0438 5.27822C17.185 5.68235 17.505 6.0113 17.9096 6.17107L18.2767 6.31205C18.3519 6.34025 18.3519 6.45303 18.2767 6.48122Z" fill="#5A5A5A"/></svg>);
 const IcL2ARAds = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5.28418 12.5574H4.07975C3.42057 12.5574 2.85091 12.3214 2.37891 11.8494C1.9069 11.3774 1.6709 10.8077 1.6709 10.1485V7.73967C1.6709 7.08049 1.9069 6.51082 2.37891 6.03882C2.85091 5.56681 3.42057 5.33081 4.07975 5.33081H8.9056L13.0967 2.79175C13.4954 2.54761 13.9023 2.54761 14.3174 2.79175C14.7324 3.03589 14.9359 3.38582 14.9359 3.84969V14.0385C14.9359 14.5024 14.7324 14.8523 14.3174 15.0964C13.9023 15.3406 13.4954 15.3406 13.0967 15.0964L8.9056 12.5655H7.70117V16.1788C7.70117 16.5206 7.58724 16.8054 7.35124 17.0414C7.11523 17.2774 6.8304 17.3914 6.48861 17.3914C6.14681 17.3914 5.86198 17.2774 5.62598 17.0414C5.38997 16.8054 5.27604 16.5206 5.27604 16.1788V12.5655L5.28418 12.5574ZM16.5228 12.9806V4.8995C17.068 5.37964 17.4994 5.96558 17.833 6.66545C18.1667 7.36532 18.3294 8.11401 18.3294 8.94409C18.3294 9.77417 18.1667 10.5229 17.833 11.2227C17.4994 11.9226 17.068 12.5004 16.5228 12.9887V12.9806Z" fill="#5a5a5a"/></svg>);
 const IcChevronUp20 = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4.17825 13.2114C4.01326 13.0464 3.92487 12.8519 3.91309 12.628C3.91309 12.4041 3.98969 12.2096 4.15468 12.0446L9.42263 6.77668C9.50512 6.69419 9.5994 6.63526 9.69368 6.59991C9.78797 6.56455 9.89992 6.54688 10.006 6.54688C10.1121 6.54688 10.224 6.56455 10.3183 6.59991C10.4126 6.63526 10.5069 6.69419 10.5894 6.77668L15.8337 12.0211C15.9987 12.1861 16.0812 12.3864 16.0871 12.6162C16.093 12.846 16.0046 13.0405 15.8337 13.2114C15.6687 13.3646 15.4743 13.4412 15.2386 13.4412C15.0029 13.4412 14.8202 13.3646 14.667 13.2114L10.006 8.55034L5.34498 13.2114C5.17999 13.3763 4.97964 13.4588 4.76161 13.453C4.54359 13.4471 4.34324 13.3646 4.17825 13.2114Z" fill="#5a5a5a"/></svg>);
 const IcChevronDown20 = () => (<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M15.017 6.66663C14.792 6.66663 14.6003 6.74163 14.4337 6.90829L10.0087 11.3333L5.58366 6.90829C5.43366 6.75829 5.24199 6.68329 5.00866 6.68329C4.77533 6.68329 4.58366 6.75829 4.41699 6.90829C4.25033 7.07496 4.16699 7.27496 4.16699 7.49996C4.16699 7.72496 4.25033 7.92496 4.41699 8.09163L9.42533 13.1C9.50866 13.1833 9.60033 13.2416 9.69199 13.275C9.78366 13.3083 9.89199 13.325 10.0087 13.325C10.117 13.325 10.2253 13.3083 10.3253 13.275C10.4253 13.2416 10.5087 13.1833 10.592 13.1L15.6253 8.07496C15.792 7.90829 15.8753 7.71663 15.867 7.49163C15.867 7.26663 15.7753 7.07496 15.6087 6.90829C15.442 6.75829 15.2503 6.67496 15.0253 6.66663H15.017Z" fill="#5a5a5a"/></svg>);
@@ -1518,7 +1572,7 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
       return label ? { label, color: newColor } : null;
     }
     if (valueType === "image") {
-      return newImageUrl ? { label: label || "Image", image: newImageUrl } : null;
+      return label && newImageUrl ? { label, image: newImageUrl } : null;
     }
     return label ? { label } : null;
   };
@@ -1571,10 +1625,11 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
     const type = editingOption.valueType || "text";
     let newVal;
     if (type === "color") {
-      newVal = { label: newValue.trim() || newColor, color: newColor };
+      if (!newValue.trim()) return;
+      newVal = { label: newValue.trim(), color: newColor };
     } else if (type === "image") {
-      if (!newImageUrl) return;
-      newVal = { label: newValue.trim() || "Image", image: newImageUrl };
+      if (!newImageUrl || !newValue.trim()) return;
+      newVal = { label: newValue.trim(), image: newImageUrl };
     } else {
       if (!newValue.trim()) return;
       newVal = { label: newValue.trim() };
@@ -1590,6 +1645,30 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
   };
 
   const updateVariant = (id, key, val) => setVariants(variants.map(v => v.id === id ? { ...v, [key]: val } : v));
+  const updateVariantAttributeColor = (attrName, attrValue, color) => {
+    setVariants(prev => prev.map((variant) => {
+      const matchesAttribute = variant.attributes?.some((attr) => attr.attr === attrName && attr.val === attrValue);
+      if (!matchesAttribute) return variant;
+      return {
+        ...variant,
+        color,
+        attributes: variant.attributes.map((attr) => (
+          attr.attr === attrName && attr.val === attrValue ? { ...attr, color } : attr
+        )),
+      };
+    }));
+    setVariantOptions(prev => prev.map((option) => {
+      if (option.name !== attrName) return option;
+      return {
+        ...option,
+        values: option.values.map((value) => (
+          getLabel(value) === attrValue
+            ? { ...(typeof value === "string" ? { label: value } : value), color }
+            : value
+        )),
+      };
+    }));
+  };
 
   const renderSwatch = (v, size = 36) => {
     if (v?.color) return <div style={{ width: size, height: size, borderRadius: size * 0.22, background: v.color, flexShrink: 0, border: "1px solid rgba(0,0,0,0.08)" }} />;
@@ -1597,8 +1676,35 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
     return <div style={{ width: size, height: size, borderRadius: size * 0.22, background: "#f0f0f0", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><Image size={size * 0.4} color="#ccc" /></div>;
   };
 
+  const renderEditableSwatch = (attr, size = 36) => {
+    if (attr?.color) {
+      return (
+        <label
+          title={`Pick ${attr.attr.toLowerCase()}`}
+          style={{ width: size, height: size, borderRadius: Math.round(size * 0.22), background: attr.color, flexShrink: 0, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative" }}
+        >
+          <input
+            type="color"
+            value={attr.color || "#da0e64"}
+            onChange={e => updateVariantAttributeColor(attr.attr, attr.val, e.target.value)}
+            style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", border: "none", padding: 0, opacity: 0, cursor: "pointer" }}
+          />
+        </label>
+      );
+    }
+    return renderSwatch(attr, size);
+  };
+
   // Variant order options
   const orderOptions = variantOptions.filter(o => o.optionRole !== "configurator").map(o => o.name);
+
+  useEffect(() => {
+    if (orderOptions.length > 1) {
+      setVariantOrder((current) => (current && orderOptions.includes(current) ? current : orderOptions[0]));
+      return;
+    }
+    setVariantOrder("");
+  }, [orderOptions]);
 
   // Group variants for display
   const groupedVariants = (() => {
@@ -1836,7 +1942,7 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
                           return (
                             <button key={v.id}
                               onClick={() => setExpandedGroup(isActive ? null : group.key + "::" + v.id)}
-                              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px 5px 6px", borderRadius: 20, border: isActive ? "1.5px solid #f43f5e" : "1.5px solid #e8e8e8", background: isActive ? "#fff0f3" : "#f7f7f7", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: isActive ? "#f43f5e" : "#333", transition: "all 0.15s" }}>
+                              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px 5px 6px", borderRadius: 8, border: isActive ? "1.5px solid #f43f5e" : "1.5px solid #e8e8e8", background: isActive ? "#fff0f3" : "#f7f7f7", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: isActive ? "#f43f5e" : "#333", transition: "all 0.15s" }}>
                               {subSwatch ? renderSwatch(subSwatch, 18) : null}
                               {subLabel}
                             </button>
@@ -1847,9 +1953,26 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
                     {/* Expanded variant fields */}
                     {activeVariant && (
                       <div style={{ borderTop: "1px solid #f0f0f0", background: "#fafafa" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 18px 0" }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>{activeVariant.name}</div>
-                          <div style={{ fontSize: 11.5, color: "#bbb" }}>{activeVariant.attributes.map(a => `${a.attr}: ${a.val}`).join(" · ")}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px 0" }}>
+                          {(() => {
+                            const detailAttrs = activeVariant.attributes.filter(attr => attr.attr !== variantOrder);
+                            const editableColorAttr = detailAttrs.find(attr => attr.color);
+                            const mediaAttr = editableColorAttr || detailAttrs.find(attr => attr.image);
+                            if (!mediaAttr) return null;
+                            if (editableColorAttr) {
+                              return renderEditableSwatch(editableColorAttr, 28);
+                            }
+                            return renderSwatch(mediaAttr, 28);
+                          })()}
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>
+                            {(() => {
+                              const detailValue = activeVariant.attributes
+                                .filter(attr => attr.attr !== variantOrder)
+                                .map(attr => attr.val)
+                                .join(" / ");
+                              return detailValue || activeVariant.name;
+                            })()}
+                          </div>
                         </div>
                         {renderVariantFields(activeVariant)}
                       </div>
@@ -1863,10 +1986,11 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
                 const isOpen = expandedGroup === v.id;
                 const subLabel = v.attributes.map(a => a.val).join(" / ");
                 const swatchAttr = v.attributes.find(a => a.color || a.image) ?? v.attributes[0];
+                const editableSwatchAttr = v.attributes.find(a => a.color) || swatchAttr;
                 return (
                   <div key={v.id} style={{ border: "1px solid #eaeaea", borderRadius: 12, background: "#fff", marginBottom: 8, overflow: "hidden" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }} onClick={() => setExpandedGroup(isOpen ? null : v.id)}>
-                      {renderSwatch(swatchAttr, 36)}
+                      {renderEditableSwatch(editableSwatchAttr, 36)}
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 600, color: "#222" }}>{v.name}</div>
                         {subLabel && <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 1 }}>{subLabel}</div>}
@@ -1912,7 +2036,7 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
 function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkMappings, onAddSdkMapping }) {
   const [importLink, setImportLink] = useState("");
   const [form, setForm] = useState(() => getGeneralInitialForm(editProduct));
-  const [variantOptions, setVariantOptions] = useState([]);
+  const [variantOptions, setVariantOptions] = useState(() => mapVariantOptionsForEditor(editProduct));
   const [variants, setVariants] = useState(() => mapGeneralVariantsForEditor(editProduct));
   const [error, setError] = useState("");
   const [showAdditional, setShowAdditional] = useState(true);
@@ -1947,7 +2071,7 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
   useEffect(() => {
     setImportLink(editProduct?.productUrl || "");
     setForm(getGeneralInitialForm(editProduct));
-    setVariantOptions([]);
+    setVariantOptions(mapVariantOptionsForEditor(editProduct));
     setVariants(mapGeneralVariantsForEditor(editProduct));
     setError("");
   }, [editProduct, headCategory]);
@@ -1994,7 +2118,9 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
       name: variant.name || `Variant ${index + 1}`,
       attributes: variant.attributes?.length ? variant.attributes : [{ attr: "Variant", val: variant.name || `Variant ${index + 1}` }],
       variantId: variant.variantId || "",
-      price: variant.price || form.sellingPrice || "",
+      costPrice: variant.costPrice || form.costPrice || "",
+      sellingPrice: variant.sellingPrice || variant.price || form.sellingPrice || "",
+      price: variant.sellingPrice || variant.price || form.sellingPrice || "",
       color: variant.color || "",
     })) : [{
       id: `var-${Date.now()}-0`,
@@ -2003,6 +2129,8 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
       variantId: form.skuId.trim(),
       dimension: formMeasurement.dimension || "",
       measurements: formMeasurement.measurements,
+      costPrice: form.costPrice || "",
+      sellingPrice: form.sellingPrice || "",
       price: form.sellingPrice || "",
       color: "",
     }];
@@ -2017,6 +2145,7 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
       headCategory,
       status: editProduct?.status || "active",
       date: editProduct?.date || getTodayDate(),
+      variantOptions,
       variants: nextVariants,
       additionalFields: form.additionalFields,
       productUrl: form.productUrl.trim(),
@@ -2372,7 +2501,7 @@ function GeneralAddForm({ headCategory, onBack, onSaveProduct, editProduct, sdkM
 function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
   const [importLink, setImportLink] = useState("");
   const [form, setForm] = useState(() => getBeautyInitialForm(editProduct));
-  const [variantOptions, setVariantOptions] = useState([]);
+  const [variantOptions, setVariantOptions] = useState(() => mapVariantOptionsForEditor(editProduct));
   const [variants, setVariants] = useState(() => mapBeautyVariantsForEditor(editProduct));
   const [error, setError] = useState("");
   const isEditing = Boolean(editProduct);
@@ -2392,7 +2521,7 @@ function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
   useEffect(() => {
     setImportLink(editProduct?.productUrl || "");
     setForm(getBeautyInitialForm(editProduct));
-    setVariantOptions([]);
+    setVariantOptions(mapVariantOptionsForEditor(editProduct));
     setVariants(mapBeautyVariantsForEditor(editProduct));
     setError("");
   }, [editProduct]);
@@ -2428,13 +2557,17 @@ function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
       name: variant.name || `Variant ${index + 1}`,
       attributes: variant.attributes?.length ? variant.attributes : [{ attr: "Variant", val: variant.name || `Variant ${index + 1}` }],
       variantId: variant.variantId || "",
-      price: variant.price || form.sellingPrice || "",
+      costPrice: variant.costPrice || form.costPrice || "",
+      sellingPrice: variant.sellingPrice || variant.price || form.sellingPrice || "",
+      price: variant.sellingPrice || variant.price || form.sellingPrice || "",
       color: variant.color || "",
     })) : [{
       id: `var-${Date.now()}-0`,
       name: "Default",
       attributes: [{ attr: "Variant", val: "Default" }],
       variantId: form.skuId.trim(),
+      costPrice: form.costPrice || "",
+      sellingPrice: form.sellingPrice || "",
       price: form.sellingPrice || "",
       color: "",
     }];
@@ -2448,6 +2581,7 @@ function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
       headCategory: "Beauty",
       status: editProduct?.status || "active",
       date: editProduct?.date || getTodayDate(),
+      variantOptions,
       variants: nextVariants,
       additionalFields: form.additionalFields,
       productUrl: importLink.trim(),
