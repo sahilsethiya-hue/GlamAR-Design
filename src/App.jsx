@@ -971,6 +971,8 @@ function ProductFlowHeader({
   onPrimary,
   showSecondary = true,
   showPrimary = true,
+  secondaryDisabled = false,
+  primaryDisabled = false,
 }) {
   return (
     <div style={{
@@ -998,6 +1000,7 @@ function ProductFlowHeader({
           <button
             onClick={onSecondary}
             className="glamar-btn glamar-btn-secondary"
+            disabled={secondaryDisabled}
           >
             {secondaryLabel}
           </button>
@@ -1006,6 +1009,7 @@ function ProductFlowHeader({
           <button
             onClick={onPrimary}
             className="glamar-btn glamar-btn-primary"
+            disabled={primaryDisabled}
           >
             {primaryLabel}
           </button>
@@ -1491,6 +1495,39 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
 
   // values are objects: { label, color?, image? }
   const getLabel = (v) => (typeof v === "string" ? v : v.label || "");
+  const updateEditingValue = (index, patch) => {
+    setEditingOption(prev => (
+      prev
+        ? { ...prev, values: prev.values.map((value, i) => i === index ? { ...value, ...patch } : value) }
+        : prev
+    ));
+  };
+  const normalizeValuesForType = (values, valueType) => values.map((value) => {
+    const label = getLabel(value);
+    if (valueType === "color") {
+      return { label, color: value?.color || "#da0e64" };
+    }
+    if (valueType === "image") {
+      return { label, image: value?.image || "" };
+    }
+    return { label };
+  });
+  const getDraftValueForType = (valueType) => {
+    const label = newValue.trim();
+    if (valueType === "color") {
+      return label ? { label, color: newColor } : null;
+    }
+    if (valueType === "image") {
+      return newImageUrl ? { label: label || "Image", image: newImageUrl } : null;
+    }
+    return label ? { label } : null;
+  };
+  const mergePendingDraft = (option) => {
+    if (!option) return option;
+    const draftValue = getDraftValueForType(option.valueType || "text");
+    if (!draftValue) return option;
+    return { ...option, values: [...option.values, draftValue] };
+  };
 
   const resetNewRow = () => { setNewValue(""); setNewColor("#da0e64"); setNewImageUrl(""); };
 
@@ -1517,8 +1554,9 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
   };
 
   const doneEditing = () => {
-    if (!editingOption.name.trim() || editingOption.values.length === 0) return;
-    const updated = { name: editingOption.name, valueType: editingOption.valueType || "text", optionRole: editingOption.optionRole || "sku", values: editingOption.values };
+    const optionToSave = mergePendingDraft(editingOption);
+    if (!optionToSave.name.trim() || optionToSave.values.length === 0) return;
+    const updated = { name: optionToSave.name, valueType: optionToSave.valueType || "text", optionRole: optionToSave.optionRole || "sku", values: optionToSave.values };
     const newOpts = editingIndex !== null
       ? variantOptions.map((o, i) => i === editingIndex ? updated : o)
       : [...variantOptions, updated];
@@ -1661,7 +1699,16 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
                 {/* Type dropdown */}
                 <div style={{ position: "relative" }}>
                   <select value={editingOption.valueType || "text"}
-                    onChange={e => { setEditingOption({ ...editingOption, valueType: e.target.value, values: [] }); resetNewRow(); }}
+                    onChange={e => {
+                      const nextType = e.target.value;
+                      const optionWithDraft = mergePendingDraft(editingOption);
+                      setEditingOption({
+                        ...optionWithDraft,
+                        valueType: nextType,
+                        values: normalizeValuesForType(optionWithDraft.values, nextType),
+                      });
+                      resetNewRow();
+                    }}
                     style={{ appearance: "none", background: "#fff", border: "1px solid #d9d9d9", borderRadius: 10, padding: "0 28px 0 12px", height: 36, fontSize: 13, fontWeight: 500, color: "#333", cursor: "pointer", outline: "none" }}>
                     <option value="color">Color</option>
                     <option value="image">Image</option>
@@ -1678,15 +1725,28 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
               {editingOption.values.map((v, vi) => (
                 <div key={vi} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <GripVertical size={16} color="#ccc" />
-                  {v.color && (
+                  {(editingOption.valueType === "color") && (
                     <label style={{ width: 36, height: 36, borderRadius: 9, background: v.color, flexShrink: 0, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative" }} title="Pick color">
-                      <input type="color" value={v.color} onChange={e => setEditingOption({ ...editingOption, values: editingOption.values.map((val, i) => i === vi ? { ...val, color: e.target.value } : val) })}
+                      <input type="color" value={v.color || "#da0e64"} onChange={e => updateEditingValue(vi, { color: e.target.value })}
                         style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", border: "none", padding: 0, opacity: 0, cursor: "pointer" }} />
                     </label>
                   )}
-                  {v.image && <img src={v.image} alt="" style={{ width: 36, height: 36, borderRadius: 9, objectFit: "cover", flexShrink: 0 }} />}
+                  {(editingOption.valueType === "image") && (
+                    <label style={{ width: 36, height: 36, borderRadius: 9, border: "1px dashed #d0d0d0", background: v.image ? "transparent" : "#fafafa", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, overflow: "hidden" }}>
+                      {v.image ? <img src={v.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Upload size={12} color="#bbb" />}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) updateEditingValue(vi, { image: URL.createObjectURL(file) });
+                        }}
+                      />
+                    </label>
+                  )}
                   <input style={{ ...S.input, background: "#fff" }} value={getLabel(v)}
-                    onChange={e => setEditingOption({ ...editingOption, values: editingOption.values.map((val, i) => i === vi ? { ...val, label: e.target.value } : val) })}
+                    onChange={e => updateEditingValue(vi, { label: e.target.value })}
                     onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
                   <button onClick={() => setEditingOption({ ...editingOption, values: editingOption.values.filter((_, i) => i !== vi) })} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={14} color="#bbb" /></button>
                 </div>
@@ -1741,13 +1801,13 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
               <div style={{ fontSize: 12.5, color: "#999" }}>{variants.length} variant{variants.length !== 1 ? "s" : ""} generated</div>
               {orderOptions.length > 1 && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 12.5, color: "#999" }}>Variant order</span>
-                  <div style={{ position: "relative" }}>
+                  <span style={{ ...S.label, marginBottom: 0, color: "#999", fontWeight: 500 }}>Variant order</span>
+                  <div style={{ position: "relative", width: 160 }}>
                     <select value={variantOrder} onChange={e => { setVariantOrder(e.target.value); setExpandedGroup(null); }}
-                      style={{ appearance: "none", background: "#fff", border: "1px solid #e0e0e0", borderRadius: 20, padding: "0 30px 0 12px", height: 32, fontSize: 13, fontWeight: 500, color: "#333", cursor: "pointer", outline: "none" }}>
+                      style={{ ...S.select, paddingRight: 36, height: 40, fontSize: 13.5, fontWeight: 500 }}>
                       {orderOptions.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
-                    <ChevronDown size={12} color="#888" style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                    <ChevronDown size={14} color="#aaa" style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
                   </div>
                 </div>
               )}
@@ -2493,10 +2553,8 @@ function BeautyAddForm({ onBack, onSaveProduct, editProduct }) {
               <DD label="Category*" value={form.category} onChange={v => updateForm("category", v)} options={categories} placeholder="Select category" />
               <DD label="Subcategory*" value={form.subcategory} onChange={v => updateForm("subcategory", v)} options={subcategories} placeholder="Select subcategory" disabled={!form.category} />
             </div>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
               <Inp label="Product ID*" value={form.skuId} onChange={v => updateForm("skuId", v)} placeholder="e.g. BT-001" />
-            </div>
-            <div style={{ marginBottom: 16 }}>
               <Inp label="Product Name*" value={form.productName} onChange={v => updateForm("productName", v)} placeholder="e.g. Velvet Matte Lipstick" />
             </div>
             {additionalFields.length > 0 && (
@@ -3036,10 +3094,11 @@ function ProductDetail({ product, headCategory, onBack, onPrev, onNext, onEditPr
   const lookupKey = getCategoryLookupKey(headCategory, product.category, product.subcategory);
   const has3D = catData?.modelling3D?.[lookupKey];
   const modelReady = !!product.media?.hasModel;
+  const showSaveCta = Boolean(has3D && modelReady);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <ProductFlowHeader title={product.name} tag={headCategory} onBack={onBack} showSecondary={false} primaryLabel="Save" onPrimary={onBack} />
+      <ProductFlowHeader title={product.name} tag={headCategory} onBack={onBack} showSecondary={false} primaryLabel="Save" onPrimary={onBack} showPrimary={showSaveCta} />
 
       <div style={{ flex: 1, overflow: "hidden", padding: "20px 24px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "264px 1fr 284px", gap: 18, height: "100%" }}>
@@ -3374,38 +3433,87 @@ const IcFinishShimmer = () => (
 
 const FINISH_ICONS = { Matte: <IcFinishMatte />, Gloss: <IcFinishGloss />, Shimmer: <IcFinishShimmer /> };
 
-function ARSettingsPanel({ subcategory, onDirtyChange, saveVersion = 0 }) {
+function getDefaultARSettings(subcategory) {
   const config = getARConfig(subcategory);
+  const defaultPatternType = config?.patternTypes?.[0] || "Glossy";
+  const defaultSubStyle = config?.blushSubStyles?.[0] || null;
+
+  return {
+    colorStyle: "Single",
+    colors: ["#9999FF", "#9999FF"],
+    finish: config?.finishTypes?.[0] || "Matte",
+    lipColor: "#9999FF",
+    intensity: 50,
+    glossValue: 50,
+    shimmerColor: "#9999FF",
+    shimmerIntensity: 50,
+    shimmerDensity: 50,
+    shimmerGranularity: 50,
+    selectedPattern: config?.patternTypes?.[0] || "",
+    patternSliderValues: Object.fromEntries((config?.patternSliders || []).map((label) => [label, 50])),
+    eyeshadowPatternColors: [
+      { id: "ec1", isMain: true, color: "#9999FF", intensity: 50 },
+      { id: "ec2", isMain: false, color: "#9999FF", intensity: 50 },
+      { id: "ec3", isMain: false, color: "#9999FF", intensity: 50 },
+    ],
+    patterns: [
+      { id: "pat1", type: defaultPatternType, collapsed: false, intensity: "24%", gloss: "24%", density: "24%", granularity: "24%", color: "#9999FF", subStyle: defaultSubStyle }
+    ],
+    selectedPatternId: "pat1",
+  };
+}
+
+function normalizeARSettings(subcategory, savedSettings) {
+  const defaults = getDefaultARSettings(subcategory);
+  if (!savedSettings) return defaults;
+
+  const nextPatterns = Array.isArray(savedSettings.patterns) && savedSettings.patterns.length > 0
+    ? savedSettings.patterns
+    : defaults.patterns;
+  const nextEyeshadowPatternColors = Array.isArray(savedSettings.eyeshadowPatternColors) && savedSettings.eyeshadowPatternColors.length > 0
+    ? savedSettings.eyeshadowPatternColors
+    : defaults.eyeshadowPatternColors;
+
+  return {
+    ...defaults,
+    ...savedSettings,
+    colors: Array.isArray(savedSettings.colors) && savedSettings.colors.length > 0 ? savedSettings.colors : defaults.colors,
+    patternSliderValues: { ...defaults.patternSliderValues, ...(savedSettings.patternSliderValues || {}) },
+    eyeshadowPatternColors: nextEyeshadowPatternColors,
+    patterns: nextPatterns,
+    selectedPatternId: savedSettings.selectedPatternId || nextPatterns[0]?.id || defaults.selectedPatternId,
+  };
+}
+
+function ARSettingsPanel({ subcategory, initialSettings: savedSettings, onDirtyChange, onSaveSettings, saveVersion = 0, startDirty = false }) {
+  const config = getARConfig(subcategory);
+  const initialSettings = normalizeARSettings(subcategory, savedSettings);
 
   // Colors adjustments state
-  const [colorStyle, setColorStyle] = useState("Single");
-  const [colors, setColors] = useState(["#9999FF", "#9999FF"]);
+  const [colorStyle, setColorStyle] = useState(initialSettings.colorStyle);
+  const [colors, setColors] = useState(initialSettings.colors);
   const [colorStyleOpen, setColorStyleOpen] = useState(false);
 
   // Color-only mode state (lipstick, foundation, nail polish)
-  const [finish, setFinish] = useState(config?.finishTypes?.[0] || "Matte");
+  const [finish, setFinish] = useState(initialSettings.finish);
   const [finishOpen, setFinishOpen] = useState(false);
-  const [lipColor, setLipColor] = useState("#9999FF");
-  const [intensity, setIntensity] = useState(50);
-  const [glossValue, setGlossValue] = useState(50);
-  const [shimmerColor, setShimmerColor] = useState("#9999FF");
-  const [shimmerIntensity, setShimmerIntensity] = useState(50);
-  const [shimmerDensity, setShimmerDensity] = useState(50);
-  const [shimmerGranularity, setShimmerGranularity] = useState(50);
+  const [lipColor, setLipColor] = useState(initialSettings.lipColor);
+  const [intensity, setIntensity] = useState(initialSettings.intensity);
+  const [glossValue, setGlossValue] = useState(initialSettings.glossValue);
+  const [shimmerColor, setShimmerColor] = useState(initialSettings.shimmerColor);
+  const [shimmerIntensity, setShimmerIntensity] = useState(initialSettings.shimmerIntensity);
+  const [shimmerDensity, setShimmerDensity] = useState(initialSettings.shimmerDensity);
+  const [shimmerGranularity, setShimmerGranularity] = useState(initialSettings.shimmerGranularity);
 
   // Color + pattern mode state (Eyeliner, Mascara, Eyebrows, Eyelashes, Lipliner)
-  const [selectedPattern, setSelectedPattern] = useState(config?.patternTypes?.[0] || "");
+  const [selectedPattern, setSelectedPattern] = useState(initialSettings.selectedPattern);
 
-  const [patternSliderValues, setPatternSliderValues] = useState({});
+  const [patternSliderValues, setPatternSliderValues] = useState(initialSettings.patternSliderValues);
   const [apiPatterns, setApiPatterns] = useState(null); // fetched from PixelBin API
   const [patternsLoading, setPatternsLoading] = useState(false);
 
   // Eyeshadow mode state — pattern color cards (draggable, 1–3 per pattern)
-  const [eyeshadowPatternColors, setEyeshadowPatternColors] = useState([
-    { id: "ec1", isMain: true, color: "#9999FF", intensity: 50 },
-    { id: "ec2", isMain: false, color: "#9999FF", intensity: 50 },
-    { id: "ec3", isMain: false, color: "#9999FF", intensity: 50 },
-  ]);
+  const [eyeshadowPatternColors, setEyeshadowPatternColors] = useState(initialSettings.eyeshadowPatternColors);
   const eyeshadowDragRef = useRef(null);
 
   useEffect(() => {
@@ -3419,12 +3527,11 @@ function ARSettingsPanel({ subcategory, onDirtyChange, saveVersion = 0 }) {
   }, [subcategory]);
 
   // Pattern state — each pattern: { id, type, collapsed, intensity, gloss, density, granularity, color }
-  const defaultPatternType = config?.patternTypes?.[0] || "Glossy";
-  const defaultSubStyle = config?.blushSubStyles?.[0] || null;
-  const [patterns, setPatterns] = useState([
-    { id: "pat1", type: defaultPatternType, collapsed: false, intensity: "24%", gloss: "24%", density: "24%", granularity: "24%", color: "#9999FF", subStyle: defaultSubStyle }
-  ]);
-  const [selectedPatternId, setSelectedPatternId] = useState("pat1");
+  const [patterns, setPatterns] = useState(initialSettings.patterns);
+  const [selectedPatternId, setSelectedPatternId] = useState(initialSettings.selectedPatternId);
+  const [savedSnapshot, setSavedSnapshot] = useState(JSON.stringify(initialSettings));
+  const [forceDirty, setForceDirty] = useState(startDirty);
+  const saveVersionRef = useRef(saveVersion);
 
   const [showPatternPicker, setShowPatternPicker] = useState(false);
   const [pickerTargetId, setPickerTargetId] = useState(null);
@@ -3439,6 +3546,59 @@ function ARSettingsPanel({ subcategory, onDirtyChange, saveVersion = 0 }) {
   };
   const styleOptions = config?.styleOptions || ["Single", "Dual", "Ombre"];
   const colorCount = colorStyle === "Dual" ? 2 : 1;
+
+  useEffect(() => {
+    const nextInitialSettings = normalizeARSettings(subcategory, savedSettings);
+    setColorStyle(nextInitialSettings.colorStyle);
+    setColors(nextInitialSettings.colors);
+    setFinish(nextInitialSettings.finish);
+    setLipColor(nextInitialSettings.lipColor);
+    setIntensity(nextInitialSettings.intensity);
+    setGlossValue(nextInitialSettings.glossValue);
+    setShimmerColor(nextInitialSettings.shimmerColor);
+    setShimmerIntensity(nextInitialSettings.shimmerIntensity);
+    setShimmerDensity(nextInitialSettings.shimmerDensity);
+    setShimmerGranularity(nextInitialSettings.shimmerGranularity);
+    setSelectedPattern(nextInitialSettings.selectedPattern);
+    setPatternSliderValues(nextInitialSettings.patternSliderValues);
+    setEyeshadowPatternColors(nextInitialSettings.eyeshadowPatternColors);
+    setPatterns(nextInitialSettings.patterns);
+    setSelectedPatternId(nextInitialSettings.selectedPatternId);
+    setSavedSnapshot(JSON.stringify(nextInitialSettings));
+    setForceDirty(startDirty);
+    saveVersionRef.current = saveVersion;
+  }, [subcategory, savedSettings, startDirty]);
+
+  const settingsSnapshot = {
+    colorStyle,
+    colors,
+    finish,
+    lipColor,
+    intensity,
+    glossValue,
+    shimmerColor,
+    shimmerIntensity,
+    shimmerDensity,
+    shimmerGranularity,
+    selectedPattern,
+    patternSliderValues,
+    eyeshadowPatternColors,
+    patterns,
+    selectedPatternId,
+  };
+  const snapshotString = JSON.stringify(settingsSnapshot);
+
+  useEffect(() => {
+    onDirtyChange(forceDirty || snapshotString !== savedSnapshot);
+  }, [forceDirty, onDirtyChange, savedSnapshot, snapshotString]);
+
+  useEffect(() => {
+    if (saveVersion === saveVersionRef.current) return;
+    saveVersionRef.current = saveVersion;
+    setSavedSnapshot(snapshotString);
+    setForceDirty(false);
+    onSaveSettings?.(settingsSnapshot);
+  }, [onSaveSettings, saveVersion, settingsSnapshot, snapshotString]);
 
   const selectPattern = (type) => {
     if (pickerTargetId === null) {
@@ -4048,16 +4208,16 @@ function ARSettingsPanel({ subcategory, onDirtyChange, saveVersion = 0 }) {
 }
 
 // ─── AR STUDIO (Beauty) ───
-function ARStudio({ product, onBack, onPrev, onNext, onToggleStatus, onEditProduct }) {
+function ARStudio({ product, onBack, onPrev, onNext, onToggleStatus, onEditProduct, startDirty = false, onSaveSettings }) {
   const [selectedVariant, setSelectedVariant] = useState(0);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveVersion, setSaveVersion] = useState(0);
   const hasAR = BEAUTY_CATEGORIES[product.category]?.ar?.[product.subcategory];
 
   useEffect(() => {
-    setHasUnsavedChanges(false);
+    setHasUnsavedChanges(startDirty);
     setSaveVersion(0);
-  }, [product.id, product.subcategory]);
+  }, [product.id, product.subcategory, startDirty]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -4066,9 +4226,12 @@ function ARStudio({ product, onBack, onPrev, onNext, onToggleStatus, onEditProdu
         tag={product.category}
         onBack={onBack}
         primaryLabel="Save"
-        onPrimary={() => setSaveVersion(v => v + 1)}
+        onPrimary={() => {
+          if (hasAR && hasUnsavedChanges) setSaveVersion(v => v + 1);
+        }}
         showSecondary={false}
-        showPrimary={hasAR && hasUnsavedChanges}
+        showPrimary={hasAR}
+        primaryDisabled={!hasUnsavedChanges}
       />
       <div style={{ flex: 1, padding: "20px 24px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "grid", gridTemplateColumns: "264px minmax(0, 1fr) 320px", gap: 18, alignItems: "stretch", flex: 1, minHeight: 0 }}>
@@ -4160,7 +4323,14 @@ function ARStudio({ product, onBack, onPrev, onNext, onToggleStatus, onEditProdu
 
           {/* Right: General Settings (no AR Settings wrapper) */}
           <div style={{ overflow: "visible", minHeight: 0, overflowY: "auto" }}>
-            {hasAR ? <ARSettingsPanel subcategory={product.subcategory} onDirtyChange={setHasUnsavedChanges} saveVersion={saveVersion} /> : (
+            {hasAR ? <ARSettingsPanel
+              subcategory={product.subcategory}
+              initialSettings={product.arSettings}
+              startDirty={startDirty}
+              onDirtyChange={setHasUnsavedChanges}
+              onSaveSettings={onSaveSettings}
+              saveVersion={saveVersion}
+            /> : (
               <div style={{ ...S.card, textAlign: "center", color: "#bbb", padding: 40 }}>
                 <Package size={32} strokeWidth={1} style={{ marginBottom: 8 }} />
                 <p>AR not available for {product.subcategory}</p>
@@ -5135,6 +5305,7 @@ export default function App() {
   const [view, setView] = useState("listing");
   const [products, setProducts] = useState(INITIAL_PRODUCTS);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [arStudioStartsDirty, setArStudioStartsDirty] = useState(false);
   const [sidebarPage, setSidebarPage] = useState("products");
   const [aiStylistFullscreen, setAIStylistFullscreen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -5163,14 +5334,15 @@ export default function App() {
     if (page === "products") {
       setView("listing");
       setSelectedProduct(null);
+      setArStudioStartsDirty(false);
     }
   };
 
   const tabProducts = products.filter(p => p.headCategory === activeTab);
 
-  const handleAddProduct = () => { setSelectedProduct(null); setView("addProduct"); };
-  const handleViewProduct = (p) => { setSelectedProduct(p); setView(p.headCategory === "Beauty" ? "arStudio" : "productDetail"); };
-  const handleEditProduct = (p) => { setSelectedProduct(p); setView("addProduct"); };
+  const handleAddProduct = () => { setSelectedProduct(null); setArStudioStartsDirty(false); setView("addProduct"); };
+  const handleViewProduct = (p) => { setSelectedProduct(p); setArStudioStartsDirty(false); setView(p.headCategory === "Beauty" ? "arStudio" : "productDetail"); };
+  const handleEditProduct = (p) => { setSelectedProduct(p); setArStudioStartsDirty(false); setView("addProduct"); };
   const handleToggleStatus = (id) => setProducts(ps => ps.map(p => p.id === id ? { ...p, status: p.status === "active" ? "inactive" : "active" } : p));
   const handleSaveProduct = (productData, nextView = "listing") => {
     const isEdit = products.some(p => p.id === productData.id);
@@ -5186,6 +5358,7 @@ export default function App() {
     );
     setActiveTab(enriched.headCategory);
     setSelectedProduct(enriched);
+    setArStudioStartsDirty(nextView === "arStudio");
     setView(nextView);
     if (nextView === "listing") setSelectedProduct(null);
     if (isGenerating3D) {
@@ -5193,6 +5366,12 @@ export default function App() {
     } else {
       showToast(isEdit ? "Product updated successfully" : "Product added successfully");
     }
+  };
+  const handleSaveARSettings = (productId, arSettings) => {
+    setProducts(prev => prev.map(product => product.id === productId ? { ...product, arSettings } : product));
+    setSelectedProduct(prev => (prev && prev.id === productId ? { ...prev, arSettings } : prev));
+    setArStudioStartsDirty(false);
+    showToast("AR settings saved successfully");
   };
 
   const handlePrev = () => {
@@ -5339,7 +5518,9 @@ export default function App() {
             {/* AR STUDIO (Beauty) */}
             {!isAIStylist && view === "arStudio" && selectedProduct && (
               <ARStudio product={selectedProduct} onBack={() => setView("listing")}
-                onPrev={handlePrev} onNext={handleNext} onToggleStatus={handleToggleStatus} onEditProduct={handleEditProduct} />
+                onPrev={handlePrev} onNext={handleNext} onToggleStatus={handleToggleStatus}
+                onEditProduct={handleEditProduct} startDirty={arStudioStartsDirty}
+                onSaveSettings={(arSettings) => handleSaveARSettings(selectedProduct.id, arSettings)} />
             )}
           </div>
         </div>
