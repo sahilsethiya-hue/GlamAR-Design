@@ -496,6 +496,139 @@ function mapBeautyVariantsForEditor(product) {
   });
 }
 
+function getVariantValueLabel(value) {
+  return typeof value === "string" ? value : value?.label || "";
+}
+
+function getStudioDisplayType(option) {
+  if (option?.studioConfig?.displayType) return option.studioConfig.displayType;
+  if (option?.valueType === "image") return "thumbnail";
+  if (option?.valueType === "color") return "swatch";
+  return "text";
+}
+
+function ensureStudioVariantOptions(options = []) {
+  return options.map((option) => ({
+    ...option,
+    optionRole: option.optionRole || "configurator",
+    values: (option.values || []).map((value) => (
+      typeof value === "string"
+        ? { label: value }
+        : { ...value, label: getVariantValueLabel(value) }
+    )),
+    studioConfig: {
+      displayType: getStudioDisplayType(option),
+      showNameLabel: option?.studioConfig?.showNameLabel ?? true,
+      largeThumbnail: option?.studioConfig?.largeThumbnail ?? false,
+    },
+  }));
+}
+
+function normalizeStudioValuesForType(values, valueType) {
+  return (values || []).map((value) => {
+    const label = getVariantValueLabel(value);
+    if (valueType === "color") return { label, color: value?.color || "#da0e64" };
+    if (valueType === "image") return { label, image: value?.image || "" };
+    return { label };
+  });
+}
+
+function getStudioMeasurementSchema(product) {
+  return getMeasurementSchema(product?.headCategory, product?.category, product?.subcategory);
+}
+
+function getStudioPopupCanContinue(form, headCategory) {
+  const catData = form.category ? CATEGORY_TREE[headCategory]?.[form.category] : null;
+  const requiresSubcategory = Boolean(form.category && categoryHasL2(headCategory, form.category));
+  const selectedCategoryKey = getCategoryLookupKey(headCategory, form.category, form.subcategory);
+  const has3D = Boolean(catData && selectedCategoryKey && catData.modelling3D?.[selectedCategoryKey]);
+  const mandatoryFilled = !!form.category && (!requiresSubcategory || !!form.subcategory) && !!form.productName.trim() && !!form.skuId.trim();
+  const hasMedia = form.hasImages || form.hasModel;
+  return mandatoryFilled && (!has3D || hasMedia);
+}
+
+function buildStudioProductDraft({ form, headCategory, baseProduct }) {
+  const requiresSubcategory = Boolean(form.category && categoryHasL2(headCategory, form.category));
+  const selectedCategoryKey = getCategoryLookupKey(headCategory, form.category, form.subcategory);
+  const catData = form.category ? CATEGORY_TREE[headCategory]?.[form.category] : null;
+  const has3D = Boolean(catData && selectedCategoryKey && catData.modelling3D?.[selectedCategoryKey]);
+
+  return {
+    ...(baseProduct || {}),
+    id: baseProduct?.id || createProductId(headCategory),
+    name: form.productName.trim(),
+    skuId: form.skuId.trim(),
+    category: form.category,
+    subcategory: requiresSubcategory ? form.subcategory : "",
+    displayName: form.displayName || "",
+    headCategory,
+    status: baseProduct?.status || "inactive",
+    date: baseProduct?.date || getTodayDate(),
+    additionalFields: baseProduct?.additionalFields || {},
+    productUrl: (form.productUrl || baseProduct?.productUrl || "").trim(),
+    costPrice: baseProduct?.costPrice || "",
+    sellingPrice: baseProduct?.sellingPrice || baseProduct?.variants?.[0]?.sellingPrice || baseProduct?.variants?.[0]?.price || "",
+    dimension: baseProduct?.dimension || "",
+    measurements: baseProduct?.measurements,
+    variantOptions: ensureStudioVariantOptions(baseProduct?.variantOptions?.length ? baseProduct.variantOptions : mapVariantOptionsForEditor(baseProduct)),
+    variants: baseProduct?.variants?.length ? mapGeneralVariantsForEditor(baseProduct) : [],
+    arSettings: baseProduct?.arSettings || {},
+    media: {
+      ...(baseProduct?.media || {}),
+      hasImages: form.hasImages,
+      hasModel: has3D ? form.hasModel : false,
+      is2D: form.is2D,
+      imageTab: form.imageTab || "productImages",
+      hasThumbnail: form.hasThumbnail,
+    },
+  };
+}
+
+function makeVariantSignature(attributes = []) {
+  return attributes.map((attr) => `${attr.attr}:${attr.val}`).join("|");
+}
+
+function generateStudioVariants(options = [], existingVariants = [], measurementSchema = "dimension") {
+  const skuOptions = options.filter((option) => option.optionRole !== "configurator" && option.valueType !== "text");
+  if (skuOptions.length === 0) return [];
+
+  const combos = skuOptions.reduce((acc, option) => {
+    const optionValues = (option.values || []).map((value) => ({
+      attr: option.name,
+      val: getVariantValueLabel(value),
+      color: value.color,
+      image: value.image,
+    })).filter((value) => value.val);
+
+    if (acc.length === 0) return optionValues.map((value) => [value]);
+    const next = [];
+    acc.forEach((combo) => optionValues.forEach((value) => next.push([...combo, value])));
+    return next;
+  }, []);
+
+  const existingMap = new Map((existingVariants || []).map((variant) => [makeVariantSignature(variant.attributes), variant]));
+
+  return combos.map((combo, index) => {
+    const signature = makeVariantSignature(combo);
+    const existing = existingMap.get(signature);
+    const detail = existing ? hydrateMeasurementFields(existing.measurements, existing.dimension || "") : getEmptyMeasurementFields();
+
+    return {
+      id: existing?.id || `var-${Date.now()}-${index}`,
+      name: combo.map((item) => item.val).join(" / "),
+      attributes: combo,
+      variantId: existing?.variantId || "",
+      costPrice: existing?.costPrice || "",
+      sellingPrice: existing?.sellingPrice || existing?.price || "",
+      price: existing?.sellingPrice || existing?.price || "",
+      color: existing?.color || combo.find((item) => item.color)?.color || "",
+      measurements: existing?.measurements || buildMeasurement(measurementSchema, detail).measurements,
+      dimension: existing?.dimension || buildMeasurement(measurementSchema, detail).dimension,
+      ...detail,
+    };
+  });
+}
+
 // ─── STYLES ───
 const S = {
   app: { display: "flex", height: "100vh", fontFamily: "'Inter', -apple-system, sans-serif", background: "#f7f7f8", color: "#1a1a1a", fontSize: 13 },
@@ -1719,43 +1852,6 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
     return Object.values(map);
   })();
 
-  const renderVariantFields = (v) => (
-    <div style={{ padding: "16px 20px 20px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <Inp label="SKU ID" value={v.variantId} onChange={val => updateVariant(v.id, "variantId", val)} placeholder="e.g. VAR-001" />
-        <Inp label="Cost Price" value={v.costPrice || ""} onChange={val => updateVariant(v.id, "costPrice", val)} placeholder="Rs. 0.00" />
-        <Inp label="Selling Price" value={v.sellingPrice || ""} onChange={val => updateVariant(v.id, "sellingPrice", val)} placeholder="Rs. 0.00" />
-      </div>
-      {measurementSchema === "dimension" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 160px", gap: 14 }}>
-          <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
-          <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
-          <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
-          <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
-        </div>
-      )}
-      {measurementSchema === "ring" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
-          <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
-          {(v.isDiamondRing === "yes") && <>
-            <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
-            <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
-          </>}
-        </div>
-      )}
-      {measurementSchema === "watch" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
-          <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
-          <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
-          <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
-        </div>
-      )}
-      {has3D && <div style={{ marginTop: 14 }}><UBox small label="Upload 3D model" /></div>}
-    </div>
-  );
-
   return (
     <div style={{ ...S.card, marginBottom: 22, overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 24px", borderBottom: editingOption || variants.length > 0 || variantOptions.length > 0 ? "1px solid #f2f2f2" : "none" }}>
@@ -1920,86 +2016,164 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
             </div>
 
             {groupedVariants ? (
-              // Grouped view — left: group identity, right: sub-combination chips
-              groupedVariants.map(group => {
-                const activeChip = expandedGroup?.startsWith(group.key + "::") ? expandedGroup : null;
-                const activeVariant = activeChip ? group.variants.find(v => v.id === activeChip.split("::")[1]) : null;
-                return (
-                  <div key={group.key} style={{ border: "1px solid #eaeaea", borderRadius: 14, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
-                    <div style={{ display: "flex", minHeight: 80 }}>
-                      {/* Left: group identity */}
-                      <div style={{ width: 140, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: "16px 12px", background: "#fafafa", borderRight: "1px solid #f0f0f0" }}>
-                        {renderSwatch(group.swatch, 44)}
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#222", textAlign: "center", lineHeight: 1.3 }}>{group.key}</div>
-                        <div style={{ fontSize: 11, color: "#aaa", fontWeight: 500 }}>{group.variants.length} variant{group.variants.length !== 1 ? "s" : ""}</div>
-                      </div>
-                      {/* Right: sub-combination chips */}
-                      <div style={{ flex: 1, padding: "14px 16px", display: "flex", flexWrap: "wrap", alignContent: "flex-start", gap: 8 }}>
-                        {group.variants.map(v => {
-                          const subLabel = v.attributes.filter(a => a.attr !== variantOrder).map(a => a.val).join(" / ") || v.name;
-                          const subSwatch = v.attributes.find(a => (a.attr !== variantOrder) && (a.color || a.image));
-                          const isActive = activeChip === group.key + "::" + v.id;
-                          return (
-                            <button key={v.id}
-                              onClick={() => setExpandedGroup(isActive ? null : group.key + "::" + v.id)}
-                              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px 5px 6px", borderRadius: 8, border: isActive ? "1.5px solid #f43f5e" : "1.5px solid #e8e8e8", background: isActive ? "#fff0f3" : "#f7f7f7", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: isActive ? "#f43f5e" : "#333", transition: "all 0.15s" }}>
-                              {subSwatch ? renderSwatch(subSwatch, 18) : null}
-                              {subLabel}
-                            </button>
-                          );
-                        })}
-                      </div>
+              // Grouped: left = primary group, right = all sub-variants as rows
+              groupedVariants.map(group => (
+                <div key={group.key} style={{ border: "1px solid #e8e8e8", borderRadius: 14, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
+                  <div style={{ display: "flex" }}>
+                    {/* LEFT — primary variant identity */}
+                    <div style={{ width: 130, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "20px 12px", background: "#f8f8f8", borderRight: "1px solid #efefef" }}>
+                      {renderEditableSwatch(
+                        group.swatch?.color
+                          ? { attr: variantOrder, val: group.key, color: group.swatch.color }
+                          : group.swatch?.image
+                          ? { attr: variantOrder, val: group.key, image: group.swatch.image }
+                          : { attr: variantOrder, val: group.key },
+                        46
+                      )}
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a", textAlign: "center", lineHeight: 1.3 }}>{group.key}</div>
+                      <div style={{ fontSize: 11, color: "#bbb" }}>{group.variants.length} variant{group.variants.length !== 1 ? "s" : ""}</div>
                     </div>
-                    {/* Expanded variant fields */}
-                    {activeVariant && (
-                      <div style={{ borderTop: "1px solid #f0f0f0", background: "#fafafa" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px 0" }}>
-                          {(() => {
-                            const detailAttrs = activeVariant.attributes.filter(attr => attr.attr !== variantOrder);
-                            const editableColorAttr = detailAttrs.find(attr => attr.color);
-                            const mediaAttr = editableColorAttr || detailAttrs.find(attr => attr.image);
-                            if (!mediaAttr) return null;
-                            if (editableColorAttr) {
-                              return renderEditableSwatch(editableColorAttr, 28);
-                            }
-                            return renderSwatch(mediaAttr, 28);
-                          })()}
-                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>
-                            {(() => {
-                              const detailValue = activeVariant.attributes
-                                .filter(attr => attr.attr !== variantOrder)
-                                .map(attr => attr.val)
-                                .join(" / ");
-                              return detailValue || activeVariant.name;
-                            })()}
+                    {/* RIGHT — sub-variant rows */}
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                      {group.variants.map((v, vi) => {
+                        const isOpen = expandedGroup === v.id;
+                        const subAttrs = v.attributes.filter(a => a.attr !== variantOrder);
+                        const subLabel = subAttrs.map(a => a.val).join(" / ") || v.name;
+                        const subSwatch = subAttrs.find(a => a.color || a.image);
+                        const hasExtra = !!measurementSchema || has3D;
+                        return (
+                          <div key={v.id} style={{ borderTop: vi === 0 ? "none" : "1px solid #f2f2f2" }}>
+                            {/* Sub-variant header row */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px" }}>
+                              {subSwatch && renderSwatch(subSwatch, 28)}
+                              <div style={{ fontSize: 13, fontWeight: 600, color: "#222", minWidth: 70 }}>{subLabel}</div>
+                              <div style={{ display: "flex", gap: 8, flex: 1, alignItems: "center" }}>
+                                <input
+                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 90px", minWidth: 80, background: "#fff" }}
+                                  value={v.variantId || ""} onChange={e => updateVariant(v.id, "variantId", e.target.value)}
+                                  placeholder="SKU ID"
+                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                                <input
+                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
+                                  value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)}
+                                  placeholder="Cost ₹"
+                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                                <input
+                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
+                                  value={v.sellingPrice || ""} onChange={e => updateVariant(v.id, "sellingPrice", e.target.value)}
+                                  placeholder="Sell ₹"
+                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                              </div>
+                              {hasExtra && (
+                                <button onClick={() => setExpandedGroup(isOpen ? null : v.id)}
+                                  style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#bbb", flexShrink: 0, display: "flex", alignItems: "center" }}>
+                                  {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                </button>
+                              )}
+                            </div>
+                            {/* Expanded measurement fields */}
+                            {isOpen && hasExtra && (
+                              <div style={{ borderTop: "1px solid #f5f5f5", padding: "14px 16px 16px", background: "#fafafa" }}>
+                                {measurementSchema === "dimension" && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 140px", gap: 12 }}>
+                                    <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
+                                    <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
+                                    <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
+                                    <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
+                                  </div>
+                                )}
+                                {measurementSchema === "ring" && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                                    <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
+                                    <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
+                                    {v.isDiamondRing === "yes" && <>
+                                      <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
+                                      <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
+                                    </>}
+                                  </div>
+                                )}
+                                {measurementSchema === "watch" && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                                    <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
+                                    <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
+                                    <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
+                                    <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
+                                  </div>
+                                )}
+                                {has3D && <div style={{ marginTop: 12 }}><UBox small label="Upload 3D model" /></div>}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                        {renderVariantFields(activeVariant)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              // Flat list — compact card per variant
-              variants.map(v => {
-                const isOpen = expandedGroup === v.id;
-                const subLabel = v.attributes.map(a => a.val).join(" / ");
-                const swatchAttr = v.attributes.find(a => a.color || a.image) ?? v.attributes[0];
-                const editableSwatchAttr = v.attributes.find(a => a.color) || swatchAttr;
-                return (
-                  <div key={v.id} style={{ border: "1px solid #eaeaea", borderRadius: 12, background: "#fff", marginBottom: 8, overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }} onClick={() => setExpandedGroup(isOpen ? null : v.id)}>
-                      {renderEditableSwatch(editableSwatchAttr, 36)}
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#222" }}>{v.name}</div>
-                        {subLabel && <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 1 }}>{subLabel}</div>}
-                      </div>
-                      <div style={{ color: "#bbb" }}>{isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</div>
+                        );
+                      })}
                     </div>
-                    {isOpen && (
-                      <div style={{ borderTop: "1px solid #f0f0f0" }}>
-                        {renderVariantFields(v)}
+                  </div>
+                </div>
+              ))
+            ) : (
+              // Flat list — each variant is a single row with inline SKU + price
+              variants.map((v) => {
+                const isOpen = expandedGroup === v.id;
+                const swatchAttr = v.attributes.find(a => a.color || a.image) ?? v.attributes[0];
+                const hasExtra = !!measurementSchema || has3D;
+                return (
+                  <div key={v.id} style={{ border: "1px solid #e8e8e8", borderRadius: 12, background: "#fff", marginBottom: 8, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px" }}>
+                      {renderEditableSwatch(swatchAttr, 32)}
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#222", minWidth: 64, flexShrink: 0 }}>{v.name}</div>
+                      <div style={{ display: "flex", gap: 8, flex: 1, alignItems: "center" }}>
+                        <input
+                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 90px", minWidth: 80, background: "#fff" }}
+                          value={v.variantId || ""} onChange={e => updateVariant(v.id, "variantId", e.target.value)}
+                          placeholder="SKU ID"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                        <input
+                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
+                          value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)}
+                          placeholder="Cost ₹"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                        <input
+                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
+                          value={v.sellingPrice || ""} onChange={e => updateVariant(v.id, "sellingPrice", e.target.value)}
+                          placeholder="Sell ₹"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                      </div>
+                      {hasExtra && (
+                        <button onClick={() => setExpandedGroup(isOpen ? null : v.id)}
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#bbb", flexShrink: 0, display: "flex", alignItems: "center" }}>
+                          {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                      )}
+                    </div>
+                    {isOpen && hasExtra && (
+                      <div style={{ borderTop: "1px solid #f5f5f5", padding: "14px 16px 16px", background: "#fafafa" }}>
+                        {measurementSchema === "dimension" && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 140px", gap: 12 }}>
+                            <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
+                            <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
+                            <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
+                            <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
+                          </div>
+                        )}
+                        {measurementSchema === "ring" && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
+                            <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
+                            {v.isDiamondRing === "yes" && <>
+                              <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
+                              <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
+                            </>}
+                          </div>
+                        )}
+                        {measurementSchema === "watch" && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
+                            <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
+                            <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
+                            <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
+                          </div>
+                        )}
+                        {has3D && <div style={{ marginTop: 12 }}><UBox small label="Upload 3D model" /></div>}
                       </div>
                     )}
                   </div>
@@ -2926,7 +3100,7 @@ const GS_STUDIO_LIGHTS = [
   },
 ];
 
-function GeneralSettingsPanel({ mode = "3d" }) {
+function GeneralSettingsPanel({ mode = "3d", initialArSettings = null, onArSettingsChange }) {
   const [tplExpanded, setTplExpanded] = useState(true);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
   const [selectedTpl, setSelectedTpl] = useState("s1");
@@ -2965,6 +3139,33 @@ function GeneralSettingsPanel({ mode = "3d" }) {
   const [camSpeed, setCamSpeed] = useState("1x");
 
   const toggleSection = (id) => setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
+
+  useEffect(() => {
+    if (mode !== "ar" || !initialArSettings) return;
+    setViewerPosX(initialArSettings.viewerPosX ?? 0);
+    setViewerPosY(initialArSettings.viewerPosY ?? 0);
+    setViewerRotX(initialArSettings.viewerRotX ?? 0);
+    setViewerRotY(initialArSettings.viewerRotY ?? 0);
+    setViewerScale(initialArSettings.viewerScale ?? 0);
+  }, [
+    mode,
+    initialArSettings?.viewerPosX,
+    initialArSettings?.viewerPosY,
+    initialArSettings?.viewerRotX,
+    initialArSettings?.viewerRotY,
+    initialArSettings?.viewerScale,
+  ]);
+
+  useEffect(() => {
+    if (mode !== "ar" || !onArSettingsChange) return;
+    onArSettingsChange({
+      viewerPosX,
+      viewerPosY,
+      viewerRotX,
+      viewerRotY,
+      viewerScale,
+    });
+  }, [mode, onArSettingsChange, viewerPosX, viewerPosY, viewerRotX, viewerRotY, viewerScale]);
 
   if (mode === "ar") {
     return (
@@ -3206,6 +3407,1152 @@ function GeneralSettingsPanel({ mode = "3d" }) {
             <GsSpeedSelector value={camSpeed} onChange={setCamSpeed} />
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function StudioCreateProductModal({
+  open,
+  headCategory,
+  editProduct,
+  sdkMappings,
+  onAddSdkMapping,
+  onClose,
+  onContinue,
+}) {
+  const [importLink, setImportLink] = useState("");
+  const [form, setForm] = useState(() => getGeneralInitialForm(editProduct));
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setImportLink(editProduct?.productUrl || "");
+    setForm(getGeneralInitialForm(editProduct));
+    setError("");
+  }, [open, editProduct, headCategory]);
+
+  if (!open) return null;
+
+  const categories = Object.keys(CATEGORY_TREE[headCategory] || {});
+  const catData = form.category ? CATEGORY_TREE[headCategory]?.[form.category] : null;
+  const subcategories = catData?.subcategories || [];
+  const requiresSubcategory = Boolean(form.category && categoryHasL2(headCategory, form.category));
+  const selectedCategoryKey = getCategoryLookupKey(headCategory, form.category, form.subcategory);
+  const show2DToggle = catData?.sides2D !== null;
+  const has3D = Boolean(catData && selectedCategoryKey && catData.modelling3D?.[selectedCategoryKey]);
+  const canContinue = getStudioPopupCanContinue({ ...form, productUrl: importLink }, headCategory);
+
+  const updateForm = (key, val) => {
+    const next = { ...form, [key]: val };
+    if (key === "category" || key === "subcategory") {
+      Object.assign(next, getEmptyMeasurementFields());
+    }
+    if (key === "category") {
+      next.subcategory = "";
+      next.additionalFields = {};
+      next.is2D = false;
+      next.hasImages = false;
+      next.hasModel = false;
+      next.displayName = "";
+    }
+    if (key === "subcategory") {
+      next.displayName = "";
+      next.hasImages = false;
+      next.hasModel = false;
+    }
+    setForm(next);
+  };
+
+  const handleImportProduct = () => {
+    if (!importLink.trim()) {
+      setError("Paste a product URL first to import details.");
+      return;
+    }
+    try {
+      const url = new URL(importLink.trim());
+      const slug = url.pathname.split("/").filter(Boolean).pop() || "Imported Product";
+      const productName = slugToName(slug);
+      setForm(prev => ({
+        ...prev,
+        productName: prev.productName || productName,
+        skuId: prev.skuId || buildSkuFromName(productName, headCategory === "Home" ? "HM" : "SKU"),
+      }));
+      setError("");
+    } catch {
+      setError("Enter a valid product URL to import.");
+    }
+  };
+
+  const handleContinue = () => {
+    if (!canContinue) {
+      setError("Category, product basics, and required media are needed before continuing.");
+      return;
+    }
+    onContinue(buildStudioProductDraft({
+      form: { ...form, productUrl: importLink },
+      headCategory,
+      baseProduct: editProduct,
+    }));
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.48)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: 920, maxWidth: "100%", maxHeight: "92vh", background: "#fff", borderRadius: 24, boxShadow: "0 30px 80px rgba(20,20,20,0.22)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid #ededed", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.6 }}>{editProduct ? "Edit product" : "Create product"}</span>
+            <span style={{ fontSize: 12, color: "#555", background: "#f2f2f2", padding: "4px 12px", borderRadius: 999 }}>{headCategory}</span>
+          </div>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "#f5f5f5", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={16} color="#666" />
+          </button>
+        </div>
+
+        <div style={{ padding: 24, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
+          {error && (
+            <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 12, padding: "12px 14px", fontSize: 13.5 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ ...S.card, padding: "12px 16px" }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1, position: "relative" }}>
+                <Link size={14} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#bbb" }} />
+                <input style={{ ...S.input, paddingLeft: 40 }} placeholder="Enter product URL" value={importLink} onChange={e => setImportLink(e.target.value)} />
+              </div>
+              <button className="glamar-btn glamar-btn-secondary" style={{ height: 42 }} onClick={handleImportProduct}>Import</button>
+            </div>
+          </div>
+
+          <div style={{ ...S.card, padding: "22px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 18, letterSpacing: -0.2 }}>Basic details</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+              <DD label="Category" value={form.category} onChange={v => updateForm("category", v)} options={categories} placeholder="Select category" required />
+              <DD
+                label="Sub category"
+                value={requiresSubcategory ? form.subcategory : ""}
+                onChange={v => updateForm("subcategory", v)}
+                options={subcategories}
+                placeholder={!form.category ? "Select category first" : (requiresSubcategory ? "Select sub category" : "No subcategory required")}
+                disabled={!form.category || !requiresSubcategory}
+                required={requiresSubcategory}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <DisplayNameDropdown
+                subcategory={form.subcategory || form.category}
+                value={form.displayName}
+                onChange={v => updateForm("displayName", v)}
+                sdkMappings={sdkMappings}
+                onAddMapping={onAddSdkMapping}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+              <Inp label="Product ID" value={form.skuId} onChange={v => updateForm("skuId", v)} placeholder="e.g. SKU-001" required />
+              <Inp label="Product name" value={form.productName} onChange={v => updateForm("productName", v)} placeholder="Enter product name" required />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={S.label}>Product thumbnail</label>
+              <div style={{ background: "#f5f5f5", borderRadius: 16, padding: 16, display: "flex", alignItems: "center", gap: 16, cursor: "pointer" }} onClick={() => updateForm("hasThumbnail", true)}>
+                <div style={{ width: 80, height: 80, borderRadius: 12, background: "#fafafa", outline: "1px solid #da0e64", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                  <Upload size={16} color="#8F0941" />
+                  <span style={{ fontSize: 12, color: "#8F0941", fontWeight: 500 }}>Upload</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: 14, color: "rgba(0,0,0,0.65)" }}>Accepted image types: png, jpeg, webp</span>
+                  <span style={{ fontSize: 14, color: "rgba(0,0,0,0.65)" }}>Aspect ratio: 1:1</span>
+                  {form.hasThumbnail && <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>Thumbnail selected</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...S.card, padding: "22px 24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: -0.2 }}>Media</span>
+              {show2DToggle && <Tog on={form.is2D} onToggle={() => updateForm("is2D", !form.is2D)} label="2D" />}
+            </div>
+
+            {!form.is2D && (
+              <>
+                <div style={{ display: "flex", background: "#f0f0f0", borderRadius: 8, padding: 2, marginBottom: 18 }}>
+                  {["productImages", "model"].map(tab => {
+                    const isActive = form.imageTab === tab;
+                    return (
+                      <div
+                        key={tab}
+                        onClick={() => updateForm("imageTab", tab)}
+                        style={{
+                          flex: 1,
+                          textAlign: "center",
+                          padding: "5px 8px",
+                          borderRadius: 6,
+                          fontSize: 14,
+                          fontWeight: isActive ? 500 : 400,
+                          cursor: "pointer",
+                          background: isActive ? "#fff" : "transparent",
+                          color: isActive ? "#da0e64" : "#5A5A5A",
+                          boxShadow: isActive ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
+                        }}
+                      >
+                        {tab === "model" ? "Model" : "Product Images"}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {form.imageTab === "productImages" && (
+                  <div
+                    style={{ border: "2px dashed #e0e0e0", borderRadius: 12, padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, background: "#fafafa", cursor: "pointer" }}
+                    onClick={() => updateForm("hasImages", true)}
+                  >
+                    <Image size={34} color="#ccc" />
+                    <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={e => { e.stopPropagation(); updateForm("hasImages", true); }}>
+                      <Upload size={14} /> Upload File
+                    </button>
+                    <p style={{ fontSize: 14, color: "#555", fontWeight: 500, margin: 0 }}>Drag and drop your files here</p>
+                    <p style={{ fontSize: 12, color: "#aaa", margin: 0 }}>Supported Format: PNG, JPG (5MB), Min. 3 images (MAX 20)</p>
+                    {form.hasImages && <p style={{ fontSize: 12, color: "#16a34a", fontWeight: 600, margin: 0 }}>Images uploaded</p>}
+                  </div>
+                )}
+
+                {form.imageTab === "model" && (
+                  <div
+                    style={{ border: "2px dashed #e0e0e0", borderRadius: 12, padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, background: "#fafafa", cursor: "pointer" }}
+                    onClick={() => updateForm("hasModel", true)}
+                  >
+                    <Box size={34} color="#ccc" />
+                    <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={e => { e.stopPropagation(); updateForm("hasModel", true); }}>
+                      <Upload size={14} /> Upload File
+                    </button>
+                    <p style={{ fontSize: 14, color: "#555", fontWeight: 500, margin: 0 }}>Drag and drop your files here</p>
+                    <p style={{ fontSize: 12, color: "#aaa", margin: 0 }}>Supported Format: GLB, USDZ (100MB)</p>
+                    {form.hasModel && <p style={{ fontSize: 12, color: "#16a34a", fontWeight: 600, margin: 0 }}>Model uploaded</p>}
+                  </div>
+                )}
+              </>
+            )}
+
+            {form.is2D && (
+              <div
+                style={{ border: "2px dashed #e0e0e0", borderRadius: 12, padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, background: "#fafafa", cursor: "pointer" }}
+                onClick={() => updateForm("hasImages", true)}
+              >
+                <Image size={34} color="#ccc" />
+                <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={e => { e.stopPropagation(); updateForm("hasImages", true); }}>
+                  <Upload size={14} /> Upload File
+                </button>
+                <p style={{ fontSize: 14, color: "#555", fontWeight: 500, margin: 0 }}>Upload the base product images</p>
+                <p style={{ fontSize: 12, color: "#aaa", margin: 0 }}>Use clean images from the supported sides for best results</p>
+                {form.hasImages && <p style={{ fontSize: 12, color: "#16a34a", fontWeight: 600, margin: 0 }}>Images uploaded</p>}
+              </div>
+            )}
+
+            {has3D && !form.hasImages && !form.hasModel && (
+              <div style={{ marginTop: 14, fontSize: 12.5, color: "#888" }}>
+                Add product images or a model before entering Studio.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: "16px 24px", borderTop: "1px solid #ededed", display: "flex", justifyContent: "flex-end", gap: 12 }}>
+          <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="glamar-btn glamar-btn-primary" disabled={!canContinue} onClick={handleContinue}>
+            {editProduct ? "Save changes" : "Continue"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioQuestionEditor({ question, onChange, onDelete }) {
+  const [newLabel, setNewLabel] = useState("");
+  const [newColor, setNewColor] = useState("#da0e64");
+  const [newImageUrl, setNewImageUrl] = useState("");
+
+  useEffect(() => {
+    setNewLabel("");
+    setNewColor("#da0e64");
+    setNewImageUrl("");
+  }, [question?.name]);
+
+  if (!question) {
+    return (
+      <div style={{ ...S.card, padding: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#141414", marginBottom: 6 }}>Select a question</div>
+        <div style={{ fontSize: 13, color: "#8b8b8b", lineHeight: 1.5 }}>Choose a configurator question from the left rail or add a new one to start building the Studio flow.</div>
+      </div>
+    );
+  }
+
+  const patchQuestion = (patch) => onChange({ ...question, ...patch });
+  const patchStudioConfig = (patch) => patchQuestion({ studioConfig: { ...(question.studioConfig || {}), ...patch } });
+
+  const normalizeForType = (nextType) => {
+    patchQuestion({
+      valueType: nextType,
+      values: normalizeStudioValuesForType(question.values || [], nextType),
+      studioConfig: {
+        ...(question.studioConfig || {}),
+        displayType: nextType === "image" ? "thumbnail" : nextType === "color" ? "swatch" : "text",
+      },
+    });
+  };
+
+  const updateValue = (index, patch) => {
+    patchQuestion({
+      values: (question.values || []).map((value, valueIndex) => valueIndex === index ? { ...value, ...patch } : value),
+    });
+  };
+
+  const removeValue = (index) => {
+    patchQuestion({ values: (question.values || []).filter((_, valueIndex) => valueIndex !== index) });
+  };
+
+  const addValue = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    let nextValue = { label };
+    if (question.valueType === "color") nextValue = { label, color: newColor };
+    if (question.valueType === "image") {
+      if (!newImageUrl) return;
+      nextValue = { label, image: newImageUrl };
+    }
+    patchQuestion({ values: [...(question.values || []), nextValue] });
+    setNewLabel("");
+    setNewColor("#da0e64");
+    setNewImageUrl("");
+  };
+
+  const displayTypeOptions = question.valueType === "image"
+    ? ["thumbnail", "text"]
+    : question.valueType === "color"
+      ? ["swatch", "text"]
+      : ["text"];
+
+  return (
+    <div style={{ ...S.card, padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#141414" }}>Question</div>
+          <div style={{ fontSize: 12.5, color: "#8b8b8b", marginTop: 4 }}>Edit the question, answer type, and how it should appear in the configurator.</div>
+        </div>
+        <button onClick={onDelete} style={{ background: "#fff5f5", color: "#dc2626", border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+          Remove
+        </button>
+      </div>
+
+      <Inp label="Question title" value={question.name} onChange={value => patchQuestion({ name: value })} placeholder="e.g. Head arch" />
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <DD label="Answer input type" value={question.valueType || "text"} onChange={normalizeForType} options={["color", "image", "text"]} placeholder="Select answer type" />
+        <DD label="Display type" value={question.studioConfig?.displayType || "text"} onChange={value => patchStudioConfig({ displayType: value })} options={displayTypeOptions} placeholder="Select display type" />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div>
+          <label style={S.label}>Role</label>
+          <div style={{ display: "flex", background: "#f2f2f2", borderRadius: 12, padding: 4 }}>
+            {["configurator", "sku"].map((role) => {
+              const active = (question.optionRole || "configurator") === role;
+              return (
+                <button
+                  key={role}
+                  onClick={() => patchQuestion({ optionRole: role })}
+                  style={{ flex: 1, height: 36, border: "none", borderRadius: 10, background: active ? "#fff" : "transparent", color: active ? "#da0e64" : "#666", fontWeight: active ? 600 : 500, cursor: "pointer", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}
+                >
+                  {role === "configurator" ? "Configurator" : "SKU"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flex: 1, border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
+            <span style={{ fontSize: 13.5, color: "#444" }}>Show name label</span>
+            <Tog on={question.studioConfig?.showNameLabel ?? true} onToggle={() => patchStudioConfig({ showNameLabel: !(question.studioConfig?.showNameLabel ?? true) })} />
+          </div>
+          {question.valueType === "image" && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flex: 1, border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
+              <span style={{ fontSize: 13.5, color: "#444" }}>Large thumbnail</span>
+              <Tog on={question.studioConfig?.largeThumbnail ?? false} onToggle={() => patchStudioConfig({ largeThumbnail: !(question.studioConfig?.largeThumbnail ?? false) })} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>Answers</div>
+        {(question.values || []).length === 0 && (
+          <div style={{ fontSize: 13, color: "#999", padding: "4px 0" }}>No answers yet. Add the first answer below.</div>
+        )}
+        {(question.values || []).map((value, index) => (
+          <div key={`${question.name}-${index}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {question.valueType === "color" && (
+              <label style={{ width: 36, height: 36, borderRadius: 10, background: value.color || "#da0e64", border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative", flexShrink: 0 }}>
+                <input type="color" value={value.color || "#da0e64"} onChange={e => updateValue(index, { color: e.target.value })} style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", opacity: 0, cursor: "pointer" }} />
+              </label>
+            )}
+            {question.valueType === "image" && (
+              <label style={{ width: 36, height: 36, borderRadius: 10, border: "1px dashed #d0d0d0", background: value.image ? "transparent" : "#fafafa", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", flexShrink: 0 }}>
+                {value.image ? <img src={value.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Upload size={12} color="#bbb" />}
+                <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) updateValue(index, { image: URL.createObjectURL(file) });
+                }} />
+              </label>
+            )}
+            <input
+              style={S.input}
+              value={getVariantValueLabel(value)}
+              onChange={e => updateValue(index, { label: e.target.value })}
+              placeholder="Answer label"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"}
+              onBlur={e => e.target.style.borderColor = "#d9d9d9"}
+            />
+            <button onClick={() => removeValue(index)} style={{ width: 34, height: 34, borderRadius: "50%", border: "none", background: "#f5f5f5", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <X size={14} color="#888" />
+            </button>
+          </div>
+        ))}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {question.valueType === "color" && (
+            <label style={{ width: 36, height: 36, borderRadius: 10, background: newColor, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", overflow: "hidden", position: "relative", flexShrink: 0 }}>
+              <input type="color" value={newColor} onChange={e => setNewColor(e.target.value)} style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", opacity: 0, cursor: "pointer" }} />
+            </label>
+          )}
+          {question.valueType === "image" && (
+            <label style={{ width: 36, height: 36, borderRadius: 10, border: "1px dashed #d0d0d0", background: newImageUrl ? "transparent" : "#fafafa", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", flexShrink: 0 }}>
+              {newImageUrl ? <img src={newImageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Upload size={12} color="#bbb" />}
+              <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) setNewImageUrl(URL.createObjectURL(file));
+              }} />
+            </label>
+          )}
+          <input
+            style={S.input}
+            value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") addValue(); }}
+            placeholder="Add answer"
+            onFocus={e => e.target.style.borderColor = "#f43f5e"}
+            onBlur={e => e.target.style.borderColor = "#d9d9d9"}
+          />
+          <button className="glamar-btn glamar-btn-primary" style={{ height: 42 }} onClick={addValue}>
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioProductSetupAccordion({ headCategory, draftProduct, setupForm, setSetupForm }) {
+  const [expanded, setExpanded] = useState(true);
+  const catData = draftProduct.category ? CATEGORY_TREE[headCategory]?.[draftProduct.category] : null;
+  const dynamicFields = (catData?.additionalFields || []).filter(field => field.name !== "barcode");
+  const measurementSchema = getMeasurementSchema(headCategory, draftProduct.category, draftProduct.subcategory);
+
+  const updateSetup = (patch) => setSetupForm(prev => ({ ...prev, ...patch }));
+  const updateAdditionalField = (name, value) => setSetupForm(prev => ({
+    ...prev,
+    additionalFields: { ...(prev.additionalFields || {}), [name]: value },
+  }));
+
+  return (
+    <div style={{ ...S.card, overflow: "hidden" }}>
+      <button onClick={() => setExpanded(value => !value)} style={{ width: "100%", background: "#fff", border: "none", padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#141414", textAlign: "left" }}>Product setup</div>
+          <div style={{ fontSize: 12.5, color: "#8b8b8b", marginTop: 4, textAlign: "left" }}>General product fields that support the configurator and saved output.</div>
+        </div>
+        {expanded ? <ChevronUp size={16} color="#888" /> : <ChevronDown size={16} color="#888" />}
+      </button>
+      {expanded && (
+        <div style={{ borderTop: "1px solid #f0f0f0", padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
+          {dynamicFields.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              {dynamicFields.map(field => field.type === "dropdown"
+                ? (
+                  <DD
+                    key={field.name}
+                    label={field.label}
+                    value={setupForm.additionalFields?.[field.name] || ""}
+                    onChange={value => updateAdditionalField(field.name, value)}
+                    options={field.options || []}
+                    placeholder={`Select ${field.label.toLowerCase()}`}
+                  />
+                ) : (
+                  <Inp
+                    key={field.name}
+                    label={field.label}
+                    value={setupForm.additionalFields?.[field.name] || ""}
+                    onChange={value => updateAdditionalField(field.name, value)}
+                    placeholder={`Enter ${field.label.toLowerCase()}`}
+                  />
+                )
+              )}
+            </div>
+          )}
+
+          {measurementSchema === "dimension" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 150px", gap: 16 }}>
+              <Inp label="Length" value={setupForm.dimensionLength || ""} onChange={value => updateSetup({ dimensionLength: value })} placeholder="0" />
+              <Inp label="Width" value={setupForm.dimensionBreadth || ""} onChange={value => updateSetup({ dimensionBreadth: value })} placeholder="0" />
+              <Inp label="Height" value={setupForm.dimensionHeight || ""} onChange={value => updateSetup({ dimensionHeight: value })} placeholder="0" />
+              <DD label="Unit" value={setupForm.dimensionUnit || "mm"} onChange={value => updateSetup({ dimensionUnit: value })} options={DIMENSION_UNITS} placeholder="Unit" />
+            </div>
+          )}
+
+          {measurementSchema === "ring" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <Inp label="Inner diameter (mm)" value={setupForm.ringInnerDiameter || ""} onChange={value => updateSetup({ ringInnerDiameter: value })} placeholder="e.g. 18" />
+              <DD label="Diamond ring" value={setupForm.isDiamondRing || "no"} onChange={value => updateSetup({ isDiamondRing: value })} options={["yes", "no"]} placeholder="Select" />
+              {setupForm.isDiamondRing === "yes" && (
+                <>
+                  <Inp label="Diamond shape" value={setupForm.diamondShape || ""} onChange={value => updateSetup({ diamondShape: value })} placeholder="e.g. Round" />
+                  <Inp label="Carat size (mm)" value={setupForm.diamondCaratSize || ""} onChange={value => updateSetup({ diamondCaratSize: value })} placeholder="e.g. 6.5" />
+                </>
+              )}
+            </div>
+          )}
+
+          {measurementSchema === "watch" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <Inp label="Case diameter (mm)" value={setupForm.watchCaseDiameter || ""} onChange={value => updateSetup({ watchCaseDiameter: value })} placeholder="e.g. 44" />
+              <Inp label="Lug-to-lug (mm)" value={setupForm.watchLugToLug || ""} onChange={value => updateSetup({ watchLugToLug: value })} placeholder="e.g. 48" />
+              <Inp label="Case thickness (mm)" value={setupForm.watchCaseThickness || ""} onChange={value => updateSetup({ watchCaseThickness: value })} placeholder="e.g. 12" />
+              <Inp label="Strap type" value={setupForm.watchStrapType || ""} onChange={value => updateSetup({ watchStrapType: value })} placeholder="e.g. Leather" />
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Inp label="Default cost price" value={setupForm.costPrice || ""} onChange={value => updateSetup({ costPrice: value })} placeholder="Rs. 0.00" />
+            <Inp label="Default selling price" value={setupForm.sellingPrice || ""} onChange={value => updateSetup({ sellingPrice: value })} placeholder="Rs. 0.00" />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Inp label="Barcode" value={setupForm.additionalFields?.barcode || ""} onChange={value => updateAdditionalField("barcode", value)} placeholder="Enter barcode" />
+            <Inp label="Product URL" value={setupForm.productUrl || ""} onChange={value => updateSetup({ productUrl: value })} placeholder="Enter product URL" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StudioVariantCombinationsModal({ open, options, selectedNames, onClose, onCreate }) {
+  const [selected, setSelected] = useState(() => new Set(selectedNames));
+  const eligibleOptions = options.filter(option => option.valueType !== "text");
+
+  useEffect(() => {
+    if (!open) return;
+    setSelected(new Set(selectedNames));
+  }, [open, selectedNames]);
+
+  if (!open) return null;
+
+  const toggle = (name) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    return next;
+  });
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.4)", zIndex: 1300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: 720, maxWidth: "100%", background: "#fff", borderRadius: 24, boxShadow: "0 28px 70px rgba(20,20,20,0.22)", overflow: "hidden" }}>
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid #ededed", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#141414" }}>Create variants</div>
+            <div style={{ fontSize: 13, color: "#7b7b7b", marginTop: 4 }}>Choose which questions should generate SKU combinations. Text-only questions stay configurator-only.</div>
+          </div>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "#f5f5f5", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={16} color="#666" />
+          </button>
+        </div>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+          {eligibleOptions.length === 0 ? (
+            <div style={{ ...S.card, padding: 18, fontSize: 13.5, color: "#8b8b8b" }}>Add color or image questions in the configurator first. Text questions can’t be used to generate variants.</div>
+          ) : eligibleOptions.map(option => {
+            const active = selected.has(option.name);
+            return (
+              <button
+                key={option.name}
+                onClick={() => toggle(option.name)}
+                style={{ width: "100%", border: `1.5px solid ${active ? "#3b82f6" : "#e5e7eb"}`, background: active ? "#eff6ff" : "#fff", borderRadius: 16, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+              >
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: active ? "#1d4ed8" : "#141414" }}>{option.name}</div>
+                  <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>{option.values?.length || 0} answers available</div>
+                </div>
+                <div style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${active ? "#3b82f6" : "#d1d5db"}`, background: active ? "#3b82f6" : "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {active && <Check size={14} color="#fff" />}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ padding: "16px 24px", borderTop: "1px solid #ededed", display: "flex", justifyContent: "flex-end", gap: 12 }}>
+          <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="glamar-btn glamar-btn-primary" disabled={selected.size === 0} onClick={() => onCreate(Array.from(selected))}>Create</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioVariantCombinationsPanel({ variantOptions, setVariantOptions, variants, setVariants, measurementSchema, onDirtyChange }) {
+  const [showModal, setShowModal] = useState(false);
+  const skuOptions = variantOptions.filter(option => option.optionRole !== "configurator" && option.valueType !== "text");
+
+  const updateVariant = (id, key, value) => {
+    setVariants(prev => prev.map(variant => variant.id === id ? { ...variant, [key]: value } : variant));
+    onDirtyChange?.();
+  };
+
+  const handleCreate = (selectedNames) => {
+    const nextOptions = variantOptions.map(option => ({
+      ...option,
+      optionRole: selectedNames.includes(option.name) ? "sku" : "configurator",
+    }));
+    setVariantOptions(nextOptions);
+    setVariants(generateStudioVariants(nextOptions, variants, measurementSchema));
+    setShowModal(false);
+    onDirtyChange?.();
+  };
+
+  return (
+    <>
+      <StudioVariantCombinationsModal
+        open={showModal}
+        options={variantOptions}
+        selectedNames={skuOptions.map(option => option.name)}
+        onClose={() => setShowModal(false)}
+        onCreate={handleCreate}
+      />
+
+      <div style={{ ...S.card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "18px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#141414" }}>Variant combinations</div>
+            <div style={{ fontSize: 12.5, color: "#8b8b8b", marginTop: 4 }}>Create SKU combinations from the selected Studio questions and manage pricing row by row.</div>
+          </div>
+          <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={() => setShowModal(true)}>
+            <Plus size={14} /> Create variants
+          </button>
+        </div>
+
+        {skuOptions.length === 0 ? (
+          <div style={{ padding: 24, fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
+            No variant-generating questions selected yet. Use “Create variants” to pick the color or image questions that should build SKU combinations.
+          </div>
+        ) : variants.length === 0 ? (
+          <div style={{ padding: 24, fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
+            The selected questions are ready, but there are no generated rows yet. Create the combinations to populate the table.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+                  {skuOptions.map(option => (
+                    <th key={option.name} style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>{option.name}</th>
+                  ))}
+                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>SKU ID</th>
+                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Cost Price</th>
+                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Selling Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {variants.map(variant => (
+                  <tr key={variant.id} style={{ borderBottom: "1px solid #f5f5f5" }}>
+                    {skuOptions.map(option => {
+                      const attr = variant.attributes?.find(attribute => attribute.attr === option.name);
+                      return (
+                        <td key={`${variant.id}-${option.name}`} style={S.td}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            {attr?.color && <div style={{ width: 18, height: 18, borderRadius: "50%", background: attr.color, border: "1px solid rgba(0,0,0,0.08)" }} />}
+                            {attr?.image && <img src={attr.image} alt="" style={{ width: 20, height: 20, borderRadius: 6, objectFit: "cover" }} />}
+                            <span>{attr?.val || "—"}</span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td style={S.td}>
+                      <input style={{ ...S.input, minWidth: 140 }} value={variant.variantId || ""} onChange={e => updateVariant(variant.id, "variantId", e.target.value)} placeholder="SKU ID" />
+                    </td>
+                    <td style={S.td}>
+                      <input style={{ ...S.input, minWidth: 140 }} value={variant.costPrice || ""} onChange={e => updateVariant(variant.id, "costPrice", e.target.value)} placeholder="Rs. 0.00" />
+                    </td>
+                    <td style={S.td}>
+                      <input style={{ ...S.input, minWidth: 140 }} value={variant.sellingPrice || ""} onChange={e => updateVariant(variant.id, "sellingPrice", e.target.value)} placeholder="Rs. 0.00" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function StudioPreviewPanel({ draftProduct, previewTab, setPreviewTab, selectedQuestionIndex }) {
+  const headCategory = draftProduct.headCategory;
+  const catData = getCategoryData(headCategory, draftProduct.category);
+  const lookupKey = getCategoryLookupKey(headCategory, draftProduct.category, draftProduct.subcategory);
+  const has3D = Boolean(catData?.modelling3D?.[lookupKey]);
+  const modelReady = Boolean(draftProduct.media?.hasModel);
+  const questions = draftProduct.variantOptions || [];
+  const selectedQuestion = questions[selectedQuestionIndex] || null;
+
+  return (
+    <div style={{ ...S.card, display: "flex", flexDirection: "column", overflow: "hidden", height: "100%" }}>
+      {has3D && (
+        <div style={{ padding: "14px 20px", display: "flex", justifyContent: "center", borderBottom: "1px solid #f2f2f2" }}>
+          <div style={{ display: "flex", background: "#f0f0f0", borderRadius: 8, padding: 2 }}>
+            {[{ id: "3d", label: "3D Model" }, { id: "ar", label: "AR / VTO" }].map(tab => {
+              const active = previewTab === tab.id;
+              return (
+                <div
+                  key={tab.id}
+                  onClick={() => setPreviewTab(tab.id)}
+                  style={{ padding: "4px 10px", borderRadius: 6, fontSize: 14, fontWeight: active ? 500 : 400, cursor: "pointer", background: active ? "#fff" : "transparent", color: active ? "#da0e64" : "#5A5A5A", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}
+                >
+                  {tab.label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", minHeight: 0 }}>
+        <div style={{ borderRight: "1px solid #f0f0f0", padding: 24, overflowY: "auto" }}>
+          <div style={{ fontSize: 28, fontWeight: 500, letterSpacing: -0.8, marginBottom: 18 }}>{draftProduct.name || "Untitled product"}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            {questions.length === 0 ? (
+              <div style={{ fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
+                Add configurator questions on the left to see a Studio-style preview of the product options.
+              </div>
+            ) : questions.map((question, index) => {
+              const previewValue = question.values?.[0];
+              const active = index === selectedQuestionIndex;
+              return (
+                <div key={`${question.name}-${index}`} style={{ paddingBottom: 16, borderBottom: "1px solid #f2f2f2" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#141414" }}>{question.name || `Question ${index + 1}`}</span>
+                    <span style={{ fontSize: 12, color: active ? "#da0e64" : "#8b8b8b", fontWeight: 600 }}>{previewValue?.label || "No answer"}</span>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                    {(question.values || []).slice(0, 6).map((value, valueIndex) => (
+                      <div key={`${question.name}-${valueIndex}`} style={{
+                        minWidth: question.studioConfig?.displayType === "thumbnail" && question.studioConfig?.largeThumbnail ? 74 : 56,
+                        minHeight: question.studioConfig?.displayType === "thumbnail" && question.studioConfig?.largeThumbnail ? 74 : 44,
+                        padding: question.studioConfig?.displayType === "text" ? "10px 12px" : 6,
+                        borderRadius: 14,
+                        border: "1px solid #ebebeb",
+                        background: "#fff",
+                        display: "flex",
+                        flexDirection: question.studioConfig?.displayType === "text" ? "row" : "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 8,
+                      }}>
+                        {question.studioConfig?.displayType === "swatch" && <div style={{ width: 34, height: 34, borderRadius: "50%", background: value.color || "#e5e5e5", border: "1px solid rgba(0,0,0,0.08)" }} />}
+                        {question.studioConfig?.displayType === "thumbnail" && (
+                          value.image
+                            ? <img src={value.image} alt="" style={{ width: question.studioConfig?.largeThumbnail ? 58 : 40, height: question.studioConfig?.largeThumbnail ? 58 : 40, borderRadius: 12, objectFit: "cover" }} />
+                            : <div style={{ width: question.studioConfig?.largeThumbnail ? 58 : 40, height: question.studioConfig?.largeThumbnail ? 58 : 40, borderRadius: 12, background: "#f5f5f5", display: "flex", alignItems: "center", justifyContent: "center" }}><Image size={16} color="#ccc" /></div>
+                        )}
+                        {(question.studioConfig?.showNameLabel ?? true) && <span style={{ fontSize: 12.5, color: "#333", textAlign: "center" }}>{value.label}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 32, position: "relative" }}>
+          {modelReady ? (
+            <div style={{ textAlign: "center" }}>
+              <div style={{ width: 96, height: 96, borderRadius: "50%", background: "linear-gradient(135deg, #fff0f5, #fce7f0)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px" }}>
+                <Box size={46} color="#f43f5e" strokeWidth={1} />
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#141414" }}>{previewTab === "ar" ? "AR / VTO preview" : "3D configurator preview"}</div>
+              <div style={{ fontSize: 13, color: "#8b8b8b", marginTop: 8, maxWidth: 360, lineHeight: 1.6 }}>
+                {selectedQuestion
+                  ? `Previewing how “${selectedQuestion.name}” will appear in the product experience.`
+                  : "Previewing the current Studio setup with the existing question configuration."}
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: "center" }}>
+              <Box size={60} color="#d0d0d0" strokeWidth={0.8} />
+              <p style={{ marginTop: 16, fontSize: 15, fontWeight: 600, color: "#888" }}>Studio preview ready</p>
+              <p style={{ fontSize: 12.5, color: "#bbb", marginTop: 6, maxWidth: 300, lineHeight: 1.6 }}>
+                Upload a model to unlock the full preview, but you can still build your configurator and variants right now.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ borderTop: "1px solid #f2f2f2", padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+        <Link size={14} color="#bbb" style={{ flexShrink: 0 }} />
+        <span style={{ flex: 1, fontSize: 12, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {draftProduct.productUrl || "https://www.meshy.ai/3d-models/..."}
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          {[Copy, QrCode, Code2, Download].map((Icon, index) => (
+            <div key={index} style={{ width: 28, height: 28, borderRadius: "50%", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", opacity: modelReady ? 1 : 0.35 }}>
+              <Icon size={15} color="#bbb" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioWorkspace({
+  product,
+  headCategory,
+  sdkMappings,
+  onAddSdkMapping,
+  onBack,
+  onSaveProduct,
+  startDirty = false,
+}) {
+  const [draftProduct, setDraftProduct] = useState(product);
+  const [setupForm, setSetupForm] = useState(() => {
+    const initial = getGeneralInitialForm(product);
+    return {
+      additionalFields: initial.additionalFields || {},
+      productUrl: product?.productUrl || "",
+      costPrice: initial.costPrice || "",
+      sellingPrice: initial.sellingPrice || "",
+      ...hydrateMeasurementFields(product?.measurements, product?.dimension || ""),
+    };
+  });
+  const [selectedPanel, setSelectedPanel] = useState({ type: "question", index: 0 });
+  const [rightTab, setRightTab] = useState("configurator");
+  const [previewTab, setPreviewTab] = useState("3d");
+  const [isDirty, setIsDirty] = useState(startDirty);
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  useEffect(() => {
+    setDraftProduct({
+      ...product,
+      variantOptions: ensureStudioVariantOptions(product?.variantOptions?.length ? product.variantOptions : mapVariantOptionsForEditor(product)),
+      variants: product?.variants?.length ? mapGeneralVariantsForEditor(product) : [],
+      arSettings: product?.arSettings || {},
+    });
+    const initial = getGeneralInitialForm(product);
+    setSetupForm({
+      additionalFields: initial.additionalFields || {},
+      productUrl: product?.productUrl || "",
+      costPrice: initial.costPrice || "",
+      sellingPrice: initial.sellingPrice || "",
+      ...hydrateMeasurementFields(product?.measurements, product?.dimension || ""),
+    });
+    setSelectedPanel({ type: "question", index: 0 });
+    setRightTab("configurator");
+    setPreviewTab("3d");
+    setIsDirty(startDirty);
+  }, [product, startDirty]);
+
+  useEffect(() => {
+    if (selectedPanel.type === "question" && selectedPanel.index >= (draftProduct?.variantOptions?.length || 0)) {
+      setSelectedPanel((draftProduct?.variantOptions?.length || 0) > 0 ? { type: "question", index: 0 } : { type: "variants" });
+    }
+  }, [selectedPanel, draftProduct?.variantOptions?.length]);
+
+  const catData = getCategoryData(headCategory, draftProduct?.category);
+  const lookupKey = getCategoryLookupKey(headCategory, draftProduct?.category, draftProduct?.subcategory);
+  const has3D = Boolean(catData?.modelling3D?.[lookupKey]);
+  const arSupported = Boolean(catData?.ar?.[lookupKey]);
+  const modelReady = Boolean(draftProduct?.media?.hasModel);
+  const measurementSchema = getStudioMeasurementSchema(draftProduct || {});
+  const selectedQuestion = selectedPanel.type === "question" ? draftProduct?.variantOptions?.[selectedPanel.index] : null;
+
+  const markDirty = () => setIsDirty(true);
+
+  const updateDraftProduct = (patch) => {
+    setDraftProduct(prev => ({ ...prev, ...patch }));
+    markDirty();
+  };
+
+  const updateQuestionAt = (index, nextQuestion) => {
+    setDraftProduct(prev => ({ ...prev, variantOptions: prev.variantOptions.map((question, questionIndex) => questionIndex === index ? nextQuestion : question) }));
+    markDirty();
+  };
+
+  const addQuestion = () => {
+    const nextQuestion = ensureStudioVariantOptions([{
+      name: `Question ${draftProduct.variantOptions.length + 1}`,
+      valueType: "color",
+      optionRole: "configurator",
+      values: [],
+    }])[0];
+    setDraftProduct(prev => ({ ...prev, variantOptions: [...(prev.variantOptions || []), nextQuestion] }));
+    setSelectedPanel({ type: "question", index: draftProduct.variantOptions.length });
+    setRightTab("configurator");
+    markDirty();
+  };
+
+  const removeQuestion = (index) => {
+    const removedQuestion = draftProduct.variantOptions[index];
+    const nextOptions = draftProduct.variantOptions.filter((_, questionIndex) => questionIndex !== index);
+    const nextVariants = removedQuestion?.optionRole === "sku"
+      ? generateStudioVariants(nextOptions, draftProduct.variants, measurementSchema)
+      : draftProduct.variants;
+    setDraftProduct(prev => ({ ...prev, variantOptions: nextOptions, variants: nextVariants }));
+    setSelectedPanel(nextOptions.length > 0 ? { type: "question", index: Math.max(0, index - 1) } : { type: "variants" });
+    markDirty();
+  };
+
+  const handlePopupSave = (nextProduct) => {
+    setDraftProduct(prev => ({
+      ...prev,
+      ...nextProduct,
+      variantOptions: prev.variantOptions,
+      variants: prev.variants,
+      arSettings: prev.arSettings,
+    }));
+    setShowEditModal(false);
+    markDirty();
+  };
+
+  const handleArSettingsChange = (nextArSettings) => {
+    setDraftProduct(prev => {
+      const prevSerialized = JSON.stringify(prev.arSettings || {});
+      const nextSerialized = JSON.stringify(nextArSettings || {});
+      if (prevSerialized === nextSerialized) return prev;
+      setIsDirty(true);
+      return { ...prev, arSettings: nextArSettings };
+    });
+  };
+
+  const handleSave = () => {
+    const formMeasurement = buildMeasurement(measurementSchema, setupForm);
+    const nextVariants = (draftProduct.variants || []).map((variant, index) => {
+      const variantMeasurement = buildMeasurement(measurementSchema, variant);
+      const dimension = variantMeasurement.dimension || formMeasurement.dimension || "";
+      const measurements = variantMeasurement.dimension ? variantMeasurement.measurements : formMeasurement.measurements;
+      return {
+        ...variant,
+        id: variant.id || `var-${Date.now()}-${index}`,
+        name: variant.name || (variant.attributes || []).map(attr => attr.val).join(" / ") || `Variant ${index + 1}`,
+        price: variant.sellingPrice || variant.price || "",
+        sellingPrice: variant.sellingPrice || variant.price || "",
+        costPrice: variant.costPrice || "",
+        dimension,
+        measurements,
+      };
+    });
+
+    const payload = {
+      ...draftProduct,
+      name: draftProduct.name?.trim() || "Untitled product",
+      skuId: draftProduct.skuId?.trim() || "",
+      additionalFields: setupForm.additionalFields || {},
+      productUrl: (setupForm.productUrl || "").trim(),
+      costPrice: setupForm.costPrice || "",
+      sellingPrice: setupForm.sellingPrice || "",
+      dimension: formMeasurement.dimension,
+      measurements: formMeasurement.measurements,
+      variantOptions: ensureStudioVariantOptions(draftProduct.variantOptions || []),
+      variants: nextVariants,
+      arSettings: draftProduct.arSettings || {},
+      media: draftProduct.media || {},
+      status: draftProduct.status || "inactive",
+      date: draftProduct.date || getTodayDate(),
+    };
+
+    onSaveProduct(payload);
+    setDraftProduct({
+      ...payload,
+      variants: payload.variants.length ? mapGeneralVariantsForEditor(payload) : [],
+      variantOptions: ensureStudioVariantOptions(payload.variantOptions),
+    });
+    setIsDirty(false);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <StudioCreateProductModal
+        open={showEditModal}
+        headCategory={headCategory}
+        editProduct={draftProduct}
+        sdkMappings={sdkMappings}
+        onAddSdkMapping={onAddSdkMapping}
+        onClose={() => setShowEditModal(false)}
+        onContinue={handlePopupSave}
+      />
+
+      <ProductFlowHeader
+        title={draftProduct?.name || "Untitled product"}
+        tag={headCategory}
+        onBack={onBack}
+        showSecondary={false}
+        primaryLabel="Save"
+        onPrimary={handleSave}
+        primaryDisabled={!isDirty}
+      />
+
+      <div style={{ flex: 1, overflow: "hidden", padding: "20px 24px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "304px minmax(0, 1fr) 360px", gap: 18, height: "100%" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
+            <div style={{ ...S.card, overflow: "hidden" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid #f0f0f0" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>Product details</span>
+                <button onClick={() => setShowEditModal(true)} style={{ background: "none", border: "none", cursor: "pointer", color: "#8f0941", fontSize: 12, fontWeight: 600 }}>Edit</button>
+              </div>
+              <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, color: "#777", marginBottom: 4 }}>SKU ID</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>{draftProduct.skuId || "—"}</div>
+                </div>
+                <div style={{ height: 1, background: "#f0f0f0" }} />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12.5, color: "#777", marginBottom: 4 }}>Category</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>{draftProduct.category || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12.5, color: "#777", marginBottom: 4 }}>Subcategory</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>{draftProduct.subcategory || "—"}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ ...S.card, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid #f0f0f0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Layers size={16} color="#555" />
+                  <span style={{ fontSize: 14, fontWeight: 600, color: "#141414" }}>Configurator</span>
+                </div>
+                <button onClick={addQuestion} style={{ width: 30, height: 30, borderRadius: 10, border: "1px solid #e6e6e6", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <Plus size={16} color="#141414" />
+                </button>
+              </div>
+              <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                {draftProduct.variantOptions.map((question, index) => {
+                  const active = selectedPanel.type === "question" && selectedPanel.index === index;
+                  return (
+                    <button
+                      key={`${question.name}-${index}`}
+                      onClick={() => { setSelectedPanel({ type: "question", index }); setRightTab("configurator"); }}
+                      style={{ width: "100%", border: `1px solid ${active ? "#8f0941" : "#ededed"}`, background: active ? "#fff5fb" : "#fff", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", textAlign: "left" }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#141414", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{question.name || `Question ${index + 1}`}</div>
+                        <div style={{ fontSize: 12, color: "#8b8b8b", marginTop: 4 }}>{question.optionRole === "sku" ? "SKU question" : "Configurator question"}</div>
+                      </div>
+                      <span style={{ fontSize: 12, color: "#8b8b8b", flexShrink: 0 }}>{question.values?.length || 0}</span>
+                    </button>
+                  );
+                })}
+
+                <button
+                  onClick={() => { setSelectedPanel({ type: "variants" }); setRightTab("configurator"); }}
+                  style={{ width: "100%", border: `1px solid ${selectedPanel.type === "variants" ? "#8f0941" : "#ededed"}`, background: selectedPanel.type === "variants" ? "#fff5fb" : "#fff", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", textAlign: "left" }}
+                >
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "#141414" }}>Variant combinations</div>
+                    <div style={{ fontSize: 12, color: "#8b8b8b", marginTop: 4 }}>{draftProduct.variants?.length || 0} rows</div>
+                  </div>
+                  <Tag size={16} color="#555" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <StudioPreviewPanel
+            draftProduct={draftProduct}
+            previewTab={previewTab}
+            setPreviewTab={setPreviewTab}
+            selectedQuestionIndex={selectedPanel.type === "question" ? selectedPanel.index : -1}
+          />
+
+          <div style={{ ...S.card, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", position: "relative" }}>
+            <div style={{ display: "flex", padding: 8, gap: 8, borderBottom: "1px solid #f0f0f0", background: "#fafafa" }}>
+              {[
+                { id: "configurator", label: "Configurator" },
+                { id: "ar", label: "AR settings" },
+              ].map(tab => {
+                const active = rightTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setRightTab(tab.id)}
+                    style={{ flex: 1, height: 40, borderRadius: 12, border: "none", background: active ? "#fff" : "transparent", color: active ? "#141414" : "#666", fontSize: 14, fontWeight: active ? 600 : 500, cursor: "pointer", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+              {rightTab === "configurator" && (
+                <>
+                  <StudioProductSetupAccordion headCategory={headCategory} draftProduct={draftProduct} setupForm={setupForm} setSetupForm={(next) => { setSetupForm(next); setIsDirty(true); }} />
+                  {selectedPanel.type === "variants" ? (
+                    <StudioVariantCombinationsPanel
+                      variantOptions={draftProduct.variantOptions || []}
+                      setVariantOptions={(nextOptions) => setDraftProduct(prev => ({ ...prev, variantOptions: nextOptions }))}
+                      variants={draftProduct.variants || []}
+                      setVariants={(nextVariants) => setDraftProduct(prev => ({ ...prev, variants: nextVariants }))}
+                      measurementSchema={measurementSchema}
+                      onDirtyChange={markDirty}
+                    />
+                  ) : (
+                    <StudioQuestionEditor
+                      question={selectedQuestion}
+                      onChange={(nextQuestion) => updateQuestionAt(selectedPanel.index, nextQuestion)}
+                      onDelete={() => removeQuestion(selectedPanel.index)}
+                    />
+                  )}
+                </>
+              )}
+
+              {rightTab === "ar" && (
+                <div style={{ ...S.card, minHeight: 0, flex: 1, overflow: "hidden", position: "relative" }}>
+                  <GeneralSettingsPanel mode="ar" initialArSettings={draftProduct.arSettings} onArSettingsChange={handleArSettingsChange} />
+                  {(!arSupported || !modelReady) && (
+                    <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.94)", backdropFilter: "blur(2px)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: 24 }}>
+                      <Box size={30} color="#ccc" strokeWidth={1.1} />
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#888", textAlign: "center" }}>
+                        {!arSupported ? "AR settings unavailable" : "AR settings need a ready model"}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: "#b1b1b1", textAlign: "center", maxWidth: 220, lineHeight: 1.6 }}>
+                        {!arSupported
+                          ? "This category doesn’t support AR right now, but the tab stays here so the Studio flow remains consistent."
+                          : "Upload or finish preparing the 3D model to unlock AR controls for this product."}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
