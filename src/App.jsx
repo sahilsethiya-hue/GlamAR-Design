@@ -3379,37 +3379,13 @@ function GsSectionHeader({ id, label, icon: Icon, help, expanded, onToggle }) {
 // left = 0 maps to -180°, right = 100 maps to +180°
 function CameraRangeSlider({ label, value, onChange }) {
   const [left, right] = value;
-  const trackRef = useRef(null);
-  const dragging = useRef(null);
-
-  const fillLeft = Math.min(left, right);
-  const fillWidth = Math.abs(right - left);
-  const leftDeg = Math.round((left / 100) * 360 - 180);
-  const rightDeg = Math.round((right / 100) * 360 - 180);
-
-  const getPct = (clientX) => {
-    const rect = trackRef.current.getBoundingClientRect();
-    return Math.min(100, Math.max(0, Math.round(((clientX - rect.left) / rect.width) * 100)));
-  };
-
-  const onTrackPointerDown = (e) => {
-    e.preventDefault();
-    trackRef.current.setPointerCapture(e.pointerId);
-    const pct = getPct(e.clientX);
-    // Pick the closer handle
-    dragging.current = Math.abs(pct - left) <= Math.abs(pct - right) ? "left" : "right";
-    if (dragging.current === "left") onChange([pct, right]);
-    else onChange([left, pct]);
-  };
-
-  const onTrackPointerMove = (e) => {
-    if (!dragging.current) return;
-    const pct = getPct(e.clientX);
-    if (dragging.current === "left") onChange([pct, right]);
-    else onChange([left, pct]);
-  };
-
-  const onTrackPointerUp = () => { dragging.current = null; };
+  const leftPct = left;
+  const rightPct = right;
+  const fillLeft = Math.min(leftPct, rightPct);
+  const fillWidth = Math.abs(rightPct - leftPct);
+  // Display degrees: left handle → -180 to 0, right handle → 0 to +180
+  const leftDeg = Math.round((left / 100) * 180 - 180);
+  const rightDeg = Math.round((right / 100) * 180 - 180);
 
   const TICK_COUNT = 10;
 
@@ -3420,18 +3396,31 @@ function CameraRangeSlider({ label, value, onChange }) {
         <div style={{ background: "#fff", border: "1px solid #e0e0e0", borderRadius: 4, padding: "2px 6px", width: 56, fontSize: 13, color: "#141414", textAlign: "center" }}>{leftDeg}°</div>
         <div style={{ background: "#fff", border: "1px solid #e0e0e0", borderRadius: 4, padding: "2px 6px", width: 56, fontSize: 13, color: "#141414", textAlign: "center" }}>{rightDeg}°</div>
       </div>
-      <div
-        ref={trackRef}
-        onPointerDown={onTrackPointerDown}
-        onPointerMove={onTrackPointerMove}
-        onPointerUp={onTrackPointerUp}
-        style={{ position: "relative", height: 20, display: "flex", alignItems: "center", cursor: "pointer", touchAction: "none" }}
-      >
+      <div style={{ position: "relative", height: 20, display: "flex", alignItems: "center" }}>
+        {/* Track */}
         <div style={{ position: "absolute", left: 0, right: 0, height: 2, background: "#e0e0e0", borderRadius: 8 }} />
+        {/* Fill between handles */}
         <div style={{ position: "absolute", left: `${fillLeft}%`, width: `${fillWidth}%`, height: 2, background: "#da0e64", borderRadius: 8 }} />
-        <div style={{ position: "absolute", left: `calc(${left}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", zIndex: 2 }} />
-        <div style={{ position: "absolute", left: `calc(${right}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", zIndex: 2 }} />
+        {/* Left range input */}
+        <input type="range" min={0} max={100} value={left}
+          onChange={e => {
+            const v = Number(e.target.value);
+            onChange([v, right]);
+          }}
+          style={{ position: "absolute", left: 0, right: 0, width: "100%", opacity: 0, cursor: "pointer", height: "100%", margin: 0, zIndex: 3 }} />
+        {/* Right range input */}
+        <input type="range" min={0} max={100} value={right}
+          onChange={e => {
+            const v = Number(e.target.value);
+            onChange([left, v]);
+          }}
+          style={{ position: "absolute", left: 0, right: 0, width: "100%", opacity: 0, cursor: "pointer", height: "100%", margin: 0, zIndex: 3 }} />
+        {/* Left thumb */}
+        <div style={{ position: "absolute", left: `calc(${leftPct}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", pointerEvents: "none", zIndex: 2 }} />
+        {/* Right thumb */}
+        <div style={{ position: "absolute", left: `calc(${rightPct}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", pointerEvents: "none", zIndex: 2 }} />
       </div>
+      {/* Tick marks */}
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         {Array.from({ length: TICK_COUNT }).map((_, i) => (
           <div key={i} style={{ width: 1, height: 6, background: "#b5b5b5" }} />
