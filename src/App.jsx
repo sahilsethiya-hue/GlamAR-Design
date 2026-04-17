@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Filter, LayoutGrid, Plus, ChevronLeft, ChevronRight, MoreVertical, X, Upload, Link, Trash2, Edit3, Eye, Copy, ChevronDown, ChevronUp, Image, Box, Info, ArrowLeft, Package, GripVertical, Palette, BarChart2, Camera, Scan, Settings, Users, KeyRound, CreditCard, Megaphone, Layers, Home, Tag, Sparkles, Webhook, HelpCircle, Headphones, Bell, Crown, QrCode, Code2, Download, Check } from "lucide-react";
+import { Search, Filter, Plus, ChevronLeft, ChevronRight, MoreVertical, X, Upload, Link, Trash2, Edit3, Eye, Copy, ChevronDown, ChevronUp, Image, Box, Info, ArrowLeft, Package, GripVertical, Palette, Camera, Scan, Settings, Users, KeyRound, CreditCard, Megaphone, Layers, Home, Tag, Sparkles, Webhook, HelpCircle, Headphones, Bell, Crown, QrCode, Code2, Download, Check } from "lucide-react";
 
 // ─── CUSTOM SVG ICONS ───
 const IcSort = () => (
@@ -471,6 +471,7 @@ function mapGeneralVariantsForEditor(product) {
       name: variant.name || `Variant ${index + 1}`,
       attributes: hydratedAttributes,
       variantId: variant.variantId || "",
+      additionalPrice: variant.additionalPrice || "",
       ...parsedMeasurements,
       costPrice: variant.costPrice || "",
       sellingPrice: variant.sellingPrice || variant.price || "",
@@ -488,6 +489,7 @@ function mapBeautyVariantsForEditor(product) {
       name: variant.name || `Variant ${index + 1}`,
       attributes: hydratedAttributes,
       variantId: variant.variantId || "",
+      additionalPrice: variant.additionalPrice || "",
       costPrice: variant.costPrice || "",
       sellingPrice: variant.sellingPrice || variant.price || "",
       price: variant.sellingPrice || variant.price || "",
@@ -537,12 +539,56 @@ function getStudioMeasurementSchema(product) {
   return getMeasurementSchema(product?.headCategory, product?.category, product?.subcategory);
 }
 
-function getStudioPopupCanContinue(form, headCategory) {
+function countStudioOptionAnswers(option = {}) {
+  return (option.values || []).filter((value) => getVariantValueLabel(value).trim()).length;
+}
+
+function countStudioVariantCombinations(options = []) {
+  if (!options.length) return 0;
+  return options.reduce((total, option) => total * countStudioOptionAnswers(option), 1);
+}
+
+function parsePriceAmount(value) {
+  const normalized = String(value || "").replace(/[^0-9.]/g, "");
+  if (!normalized) return null;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function formatPriceAmount(amount) {
+  if (!Number.isFinite(amount)) return "";
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function getVariantAdditionalPriceFromMappings(variant, pricingAdjustments = {}) {
+  let total = 0;
+  let hasAdjustment = false;
+  (variant.attributes || []).forEach((attr) => {
+    const amount = parsePriceAmount(pricingAdjustments?.[attr.attr]?.[attr.val]);
+    if (amount === null) return;
+    total += amount;
+    hasAdjustment = true;
+  });
+  return hasAdjustment ? formatPriceAmount(total) : "";
+}
+
+function getVariantSellingPrice(basePrice, additionalPrice, fallbackPrice = "") {
+  const baseAmount = parsePriceAmount(basePrice);
+  const additionalAmount = parsePriceAmount(additionalPrice);
+  if (baseAmount !== null || additionalAmount !== null) {
+    return formatPriceAmount((baseAmount || 0) + (additionalAmount || 0));
+  }
+  return (fallbackPrice || basePrice || "").trim();
+}
+
+function getStudioPopupCanContinue(form, headCategory, baseProduct) {
   const catData = form.category ? CATEGORY_TREE[headCategory]?.[form.category] : null;
   const requiresSubcategory = Boolean(form.category && categoryHasL2(headCategory, form.category));
   const selectedCategoryKey = getCategoryLookupKey(headCategory, form.category, form.subcategory);
   const has3D = Boolean(catData && selectedCategoryKey && catData.modelling3D?.[selectedCategoryKey]);
-  const mandatoryFilled = !!form.category && (!requiresSubcategory || !!form.subcategory) && !!form.productName.trim() && !!form.skuId.trim();
+  const hasMappedVariants = Boolean(baseProduct?.variants?.length);
+  const hasRequiredProductId = hasMappedVariants || !!form.skuId.trim();
+  const mandatoryFilled = !!form.category && (!requiresSubcategory || !!form.subcategory) && !!form.productName.trim() && hasRequiredProductId;
   const hasMedia = form.hasImages || form.hasModel;
   return mandatoryFilled && (!has3D || hasMedia);
 }
@@ -572,6 +618,8 @@ function buildStudioProductDraft({ form, headCategory, baseProduct }) {
     measurements: baseProduct?.measurements,
     variantOptions: ensureStudioVariantOptions(baseProduct?.variantOptions?.length ? baseProduct.variantOptions : mapVariantOptionsForEditor(baseProduct)),
     variants: baseProduct?.variants?.length ? mapGeneralVariantsForEditor(baseProduct) : [],
+    pricingAdjustments: baseProduct?.pricingAdjustments || {},
+    pricingOptionNames: baseProduct?.pricingOptionNames || [],
     arSettings: baseProduct?.arSettings || {},
     media: {
       ...(baseProduct?.media || {}),
@@ -618,6 +666,7 @@ function generateStudioVariants(options = [], existingVariants = [], measurement
       name: combo.map((item) => item.val).join(" / "),
       attributes: combo,
       variantId: existing?.variantId || "",
+      additionalPrice: existing?.additionalPrice || "",
       costPrice: existing?.costPrice || "",
       sellingPrice: existing?.sellingPrice || existing?.price || "",
       price: existing?.sellingPrice || existing?.price || "",
@@ -1385,9 +1434,6 @@ function GeneralListing({ products, activeTab, onAddProduct, onEditProduct, onVi
             <button onClick={() => setShowFilters(v => !v)} style={{ width: 32, height: 32, borderRadius: 999, border: `1px solid ${showFilters ? "#da0e64" : "#e0e0e0"}`, background: showFilters ? "#fff0f6" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <Filter size={15} color={showFilters ? "#da0e64" : "#555"} />
             </button>
-            <button style={{ width: 32, height: 32, borderRadius: 999, border: "1px solid #e0e0e0", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-              <BarChart2 size={15} color="#555" />
-            </button>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
             <button onClick={() => { }} style={{ height: 32, borderRadius: 999, border: "1px solid #e0e0e0", background: "#fff", padding: "0 16px", fontSize: 14, fontWeight: 500, color: "#e13e83", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s, border-color 0.15s, color 0.15s" }}
@@ -1568,9 +1614,6 @@ function BeautyListing({ products, activeTab, onAddProduct, onEditProduct, onVie
             <button style={{ width: 32, height: 32, borderRadius: 999, border: "1px solid #e0e0e0", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
               <Filter size={15} color="#555" />
             </button>
-            <button style={{ width: 32, height: 32, borderRadius: 999, border: "1px solid #e0e0e0", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-              <BarChart2 size={15} color="#555" />
-            </button>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
             <button onClick={() => { }} style={{ height: 32, borderRadius: 999, border: "1px solid #e0e0e0", background: "#fff", padding: "0 16px", fontSize: 14, fontWeight: 500, color: "#e13e83", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "background 0.15s, border-color 0.15s" }}
@@ -1679,6 +1722,17 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
   const [newImageUrl, setNewImageUrl] = useState("");
   const [variantOrder, setVariantOrder] = useState("");
   const [expandedGroup, setExpandedGroup] = useState(null);
+  const [vmFilterSelections, setVmFilterSelections] = useState({});
+  const [vmActivePopoverOption, setVmActivePopoverOption] = useState("");
+  const [vmPopoverLeft, setVmPopoverLeft] = useState(0);
+  const [pmFilter, setPmFilter] = useState("All");
+  const [basePrice, setBasePrice] = useState("");
+  const [pmModalOpen, setPmModalOpen] = useState(false);
+  const [pmModalSelection, setPmModalSelection] = useState("");
+  const [pmSelectedOptions, setPmSelectedOptions] = useState([]);
+  const vmFilterBarRef = useRef(null);
+  const vmPopoverRef = useRef(null);
+  const vmOptionButtonRefs = useRef({});
 
   // values are objects: { label, color?, image? }
   const getLabel = (v) => (typeof v === "string" ? v : v.label || "");
@@ -1852,7 +1906,269 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
     return Object.values(map);
   })();
 
+  // ── Derived values for Variant Mapping / Pricing Mapping sections ──
+  const filterTabs = ["All", ...variantOptions.filter(o => o.optionRole !== "configurator").map(o => o.name)];
+  const vmFilterOptions = filterTabs.slice(1);
+  const showMeasurementCols = ["dimension", "ring", "watch"].includes(measurementSchema);
+  const tabPill = (active) => ({
+    padding: "5px 14px", border: active ? "1.5px solid #1a1a1a" : "1.5px dashed #d0d0d0",
+    borderRadius: 20, background: active ? "#1a1a1a" : "#fff", color: active ? "#fff" : "#666",
+    fontSize: 12.5, fontWeight: active ? 600 : 400, cursor: "pointer", outline: "none",
+  });
+  const summarizeByAttr = (filter) => {
+    if (filter === "All") return variants;
+    const seen = new Set();
+    return variants.reduce((acc, variant) => {
+      const attr = variant.attributes.find((item) => item.attr === filter);
+      if (!attr || seen.has(attr.val)) return acc;
+      seen.add(attr.val);
+      acc.push({ ...variant, name: attr.val });
+      return acc;
+    }, []);
+  };
+  const vmFilterValuesByOption = vmFilterOptions.reduce((acc, optionName) => {
+    const option = variantOptions.find((item) => item.name === optionName);
+    const valuesFromOption = Array.from(new Set((option?.values || []).map(getLabel).map(value => value.trim()).filter(Boolean)));
+    if (valuesFromOption.length > 0) {
+      acc[optionName] = valuesFromOption;
+      return acc;
+    }
+    const valuesFromVariants = Array.from(new Set(
+      variants
+        .map((variant) => variant.attributes.find((attr) => attr.attr === optionName)?.val || "")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    ));
+    acc[optionName] = valuesFromVariants;
+    return acc;
+  }, {});
+  const vmFilterOptionsKey = vmFilterOptions.join("||");
+  const vmFilterValuesKey = vmFilterOptions.map((optionName) => `${optionName}:${(vmFilterValuesByOption[optionName] || []).join("|")}`).join("||");
+  const activeVmFilters = Object.entries(vmFilterSelections).filter(([, values]) => Array.isArray(values) && values.length > 0);
+  const vmRows = activeVmFilters.length === 0
+    ? variants
+    : variants.filter((variant) => activeVmFilters.every(([optionName, selectedValues]) => {
+      const attr = variant.attributes.find((item) => item.attr === optionName);
+      return Boolean(attr && selectedValues.includes(attr.val));
+    }));
+  const pmRows = summarizeByAttr(pmFilter);
+
+  const vmFilterPillBase = {
+    height: 34,
+    borderRadius: 999,
+    padding: "0 14px",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    cursor: "pointer",
+    outline: "none",
+    background: "#fff",
+    whiteSpace: "nowrap",
+  };
+  const vmFilterPillGhost = {
+    ...vmFilterPillBase,
+    border: "1px dashed #d0d0d0",
+    color: "#5a5a5a",
+  };
+  const vmFilterPillSelected = {
+    ...vmFilterPillBase,
+    border: "1px solid #e0e0e0",
+    color: "#141414",
+  };
+
+  const setVmOptionValues = (optionName, nextValues) => {
+    setVmFilterSelections((prev) => {
+      const cleanValues = Array.from(new Set((nextValues || []).map((value) => value.trim()).filter(Boolean)));
+      if (cleanValues.length === 0) {
+        const { [optionName]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [optionName]: cleanValues };
+    });
+  };
+  const toggleVmOptionValue = (optionName, value) => {
+    const currentValues = vmFilterSelections[optionName] || [];
+    const nextValues = currentValues.includes(value)
+      ? currentValues.filter((item) => item !== value)
+      : [...currentValues, value];
+    setVmOptionValues(optionName, nextValues);
+  };
+  const clearAllVmFilters = () => {
+    setVmFilterSelections({});
+    setVmActivePopoverOption("");
+  };
+  const setVmOptionButtonRef = (optionName, element) => {
+    if (!element) {
+      delete vmOptionButtonRefs.current[optionName];
+      return;
+    }
+    vmOptionButtonRefs.current[optionName] = element;
+  };
+  const updateVmPopoverPosition = (optionName) => {
+    const containerEl = vmFilterBarRef.current;
+    const optionEl = vmOptionButtonRefs.current[optionName];
+    if (!containerEl || !optionEl) return;
+    const containerRect = containerEl.getBoundingClientRect();
+    const optionRect = optionEl.getBoundingClientRect();
+    setVmPopoverLeft(optionRect.left - containerRect.left + optionRect.width / 2);
+  };
+
+  useEffect(() => {
+    setVmFilterSelections((prev) => {
+      const next = {};
+      vmFilterOptions.forEach((optionName) => {
+        const allowedValues = new Set(vmFilterValuesByOption[optionName] || []);
+        const keptValues = (prev[optionName] || []).filter((value) => allowedValues.has(value));
+        if (keptValues.length > 0) next[optionName] = keptValues;
+      });
+      const prevActive = Object.entries(prev).filter(([, values]) => values?.length > 0);
+      const nextActive = Object.entries(next);
+      const unchanged = prevActive.length === nextActive.length && prevActive.every(([optionName, values]) => {
+        const nextValues = next[optionName] || [];
+        return values.length === nextValues.length && values.every((value, index) => value === nextValues[index]);
+      });
+      return unchanged ? prev : next;
+    });
+  }, [vmFilterOptionsKey, vmFilterValuesKey]);
+
+  useEffect(() => {
+    if (!vmActivePopoverOption) return undefined;
+    if (!vmFilterOptions.includes(vmActivePopoverOption)) {
+      setVmActivePopoverOption("");
+      return undefined;
+    }
+    updateVmPopoverPosition(vmActivePopoverOption);
+    const onResize = () => updateVmPopoverPosition(vmActivePopoverOption);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [vmActivePopoverOption, vmFilterOptionsKey, vmRows.length]);
+
+  useEffect(() => {
+    if (!vmActivePopoverOption) return undefined;
+    const onPointerDown = (event) => {
+      if (vmPopoverRef.current?.contains(event.target)) return;
+      if (vmFilterBarRef.current?.contains(event.target)) return;
+      setVmActivePopoverOption("");
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [vmActivePopoverOption]);
+  const renderMeasurementHeaders = () => {
+    if (measurementSchema === "ring") {
+      return (
+        <>
+          <th style={{ ...S.th }}>Inner diameter</th>
+          <th style={{ ...S.th }}>Diamond ring</th>
+          <th style={{ ...S.th }}>Shape</th>
+          <th style={{ ...S.th }}>Carat size</th>
+        </>
+      );
+    }
+    if (measurementSchema === "watch") {
+      return (
+        <>
+          <th style={{ ...S.th }}>Case diameter</th>
+          <th style={{ ...S.th }}>Lug-to-lug</th>
+          <th style={{ ...S.th }}>Case thickness</th>
+          <th style={{ ...S.th }}>Strap type</th>
+        </>
+      );
+    }
+    if (measurementSchema === "dimension") {
+      return (
+        <>
+          <th style={{ ...S.th }}>Length</th>
+          <th style={{ ...S.th }}>Width</th>
+          <th style={{ ...S.th }}>Height</th>
+          <th style={{ ...S.th }}>Value</th>
+        </>
+      );
+    }
+    return null;
+  };
+  const renderMeasurementCells = (variant) => {
+    if (measurementSchema === "ring") {
+      return (
+        <>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 100 }} value={variant.ringInnerDiameter || ""} onChange={e => updateVariant(variant.id, "ringInnerDiameter", e.target.value)} placeholder="12"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <div style={{ position: "relative", width: 120 }}>
+              <select value={variant.isDiamondRing || "no"} onChange={e => updateVariant(variant.id, "isDiamondRing", e.target.value)}
+                style={{ ...S.select, height: 34, fontSize: 12.5, padding: "0 28px 0 12px", width: 120 }}>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+              <ChevronDown size={12} color="#aaa" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+            </div>
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 110 }} value={variant.diamondShape || ""} onChange={e => updateVariant(variant.id, "diamondShape", e.target.value)} placeholder="Round"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 110 }} value={variant.diamondCaratSize || ""} onChange={e => updateVariant(variant.id, "diamondCaratSize", e.target.value)} placeholder="6.5"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+        </>
+      );
+    }
+    if (measurementSchema === "watch") {
+      return (
+        <>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 100 }} value={variant.watchCaseDiameter || ""} onChange={e => updateVariant(variant.id, "watchCaseDiameter", e.target.value)} placeholder="44"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 100 }} value={variant.watchLugToLug || ""} onChange={e => updateVariant(variant.id, "watchLugToLug", e.target.value)} placeholder="48"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 110 }} value={variant.watchCaseThickness || ""} onChange={e => updateVariant(variant.id, "watchCaseThickness", e.target.value)} placeholder="12"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 130 }} value={variant.watchStrapType || ""} onChange={e => updateVariant(variant.id, "watchStrapType", e.target.value)} placeholder="Leather"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+        </>
+      );
+    }
+    if (measurementSchema === "dimension") {
+      return (
+        <>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 72 }} value={variant.dimensionLength || ""} onChange={e => updateVariant(variant.id, "dimensionLength", e.target.value)} placeholder="12"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 72 }} value={variant.dimensionBreadth || ""} onChange={e => updateVariant(variant.id, "dimensionBreadth", e.target.value)} placeholder="12"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 72 }} value={variant.dimensionHeight || ""} onChange={e => updateVariant(variant.id, "dimensionHeight", e.target.value)} placeholder="12"
+              onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+          </td>
+          <td style={{ ...S.td }}>
+            <div style={{ position: "relative", width: 110 }}>
+              <select value={variant.dimensionUnit || "cm"} onChange={e => updateVariant(variant.id, "dimensionUnit", e.target.value)}
+                style={{ ...S.select, height: 34, fontSize: 12.5, padding: "0 28px 0 12px", width: 110 }}>
+                {DIMENSION_UNITS.map(u => <option key={u}>{u}</option>)}
+              </select>
+              <ChevronDown size={12} color="#aaa" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+            </div>
+          </td>
+        </>
+      );
+    }
+    return null;
+  };
+
   return (
+    <div>
     <div style={{ ...S.card, marginBottom: 22, overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 24px", borderBottom: editingOption || variants.length > 0 || variantOptions.length > 0 ? "1px solid #f2f2f2" : "none" }}>
         <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: -0.2 }}>Select variant</div>
@@ -1996,191 +2312,9 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
           </div>
         )}
 
-        {/* Variant list */}
-        {variants.length > 0 && !editingOption && (
-          <div style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <div style={{ fontSize: 12.5, color: "#999" }}>{variants.length} variant{variants.length !== 1 ? "s" : ""} generated</div>
-              {orderOptions.length > 1 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ ...S.label, marginBottom: 0, color: "#999", fontWeight: 500 }}>Variant order</span>
-                  <div style={{ position: "relative", width: 160 }}>
-                    <select value={variantOrder} onChange={e => { setVariantOrder(e.target.value); setExpandedGroup(null); }}
-                      style={{ ...S.select, paddingRight: 36, height: 40, fontSize: 13.5, fontWeight: 500 }}>
-                      {orderOptions.map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                    <ChevronDown size={14} color="#aaa" style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {groupedVariants ? (
-              // Grouped: left = primary group, right = all sub-variants as rows
-              groupedVariants.map(group => (
-                <div key={group.key} style={{ border: "1px solid #e8e8e8", borderRadius: 14, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
-                  <div style={{ display: "flex" }}>
-                    {/* LEFT — primary variant identity */}
-                    <div style={{ width: 130, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7, padding: "20px 12px", background: "#f8f8f8", borderRight: "1px solid #efefef" }}>
-                      {renderEditableSwatch(
-                        group.swatch?.color
-                          ? { attr: variantOrder, val: group.key, color: group.swatch.color }
-                          : group.swatch?.image
-                          ? { attr: variantOrder, val: group.key, image: group.swatch.image }
-                          : { attr: variantOrder, val: group.key },
-                        46
-                      )}
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a", textAlign: "center", lineHeight: 1.3 }}>{group.key}</div>
-                      <div style={{ fontSize: 11, color: "#bbb" }}>{group.variants.length} variant{group.variants.length !== 1 ? "s" : ""}</div>
-                    </div>
-                    {/* RIGHT — sub-variant rows */}
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                      {group.variants.map((v, vi) => {
-                        const isOpen = expandedGroup === v.id;
-                        const subAttrs = v.attributes.filter(a => a.attr !== variantOrder);
-                        const subLabel = subAttrs.map(a => a.val).join(" / ") || v.name;
-                        const subSwatch = subAttrs.find(a => a.color || a.image);
-                        const hasExtra = !!measurementSchema || has3D;
-                        return (
-                          <div key={v.id} style={{ borderTop: vi === 0 ? "none" : "1px solid #f2f2f2" }}>
-                            {/* Sub-variant header row */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px" }}>
-                              {subSwatch && renderSwatch(subSwatch, 28)}
-                              <div style={{ fontSize: 13, fontWeight: 600, color: "#222", minWidth: 70 }}>{subLabel}</div>
-                              <div style={{ display: "flex", gap: 8, flex: 1, alignItems: "center" }}>
-                                <input
-                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 90px", minWidth: 80, background: "#fff" }}
-                                  value={v.variantId || ""} onChange={e => updateVariant(v.id, "variantId", e.target.value)}
-                                  placeholder="SKU ID"
-                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                                <input
-                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
-                                  value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)}
-                                  placeholder="Cost ₹"
-                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                                <input
-                                  style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
-                                  value={v.sellingPrice || ""} onChange={e => updateVariant(v.id, "sellingPrice", e.target.value)}
-                                  placeholder="Sell ₹"
-                                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                              </div>
-                              {hasExtra && (
-                                <button onClick={() => setExpandedGroup(isOpen ? null : v.id)}
-                                  style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#bbb", flexShrink: 0, display: "flex", alignItems: "center" }}>
-                                  {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                </button>
-                              )}
-                            </div>
-                            {/* Expanded measurement fields */}
-                            {isOpen && hasExtra && (
-                              <div style={{ borderTop: "1px solid #f5f5f5", padding: "14px 16px 16px", background: "#fafafa" }}>
-                                {measurementSchema === "dimension" && (
-                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 140px", gap: 12 }}>
-                                    <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
-                                    <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
-                                    <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
-                                    <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
-                                  </div>
-                                )}
-                                {measurementSchema === "ring" && (
-                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                                    <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
-                                    <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
-                                    {v.isDiamondRing === "yes" && <>
-                                      <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
-                                      <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
-                                    </>}
-                                  </div>
-                                )}
-                                {measurementSchema === "watch" && (
-                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                                    <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
-                                    <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
-                                    <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
-                                    <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
-                                  </div>
-                                )}
-                                {has3D && <div style={{ marginTop: 12 }}><UBox small label="Upload 3D model" /></div>}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              // Flat list — each variant is a single row with inline SKU + price
-              variants.map((v) => {
-                const isOpen = expandedGroup === v.id;
-                const swatchAttr = v.attributes.find(a => a.color || a.image) ?? v.attributes[0];
-                const hasExtra = !!measurementSchema || has3D;
-                return (
-                  <div key={v.id} style={{ border: "1px solid #e8e8e8", borderRadius: 12, background: "#fff", marginBottom: 8, overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px" }}>
-                      {renderEditableSwatch(swatchAttr, 32)}
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#222", minWidth: 64, flexShrink: 0 }}>{v.name}</div>
-                      <div style={{ display: "flex", gap: 8, flex: 1, alignItems: "center" }}>
-                        <input
-                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 90px", minWidth: 80, background: "#fff" }}
-                          value={v.variantId || ""} onChange={e => updateVariant(v.id, "variantId", e.target.value)}
-                          placeholder="SKU ID"
-                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                        <input
-                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
-                          value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)}
-                          placeholder="Cost ₹"
-                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                        <input
-                          style={{ ...S.input, height: 34, fontSize: 12.5, flex: "1 1 80px", minWidth: 70, background: "#fff" }}
-                          value={v.sellingPrice || ""} onChange={e => updateVariant(v.id, "sellingPrice", e.target.value)}
-                          placeholder="Sell ₹"
-                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
-                      </div>
-                      {hasExtra && (
-                        <button onClick={() => setExpandedGroup(isOpen ? null : v.id)}
-                          style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#bbb", flexShrink: 0, display: "flex", alignItems: "center" }}>
-                          {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </button>
-                      )}
-                    </div>
-                    {isOpen && hasExtra && (
-                      <div style={{ borderTop: "1px solid #f5f5f5", padding: "14px 16px 16px", background: "#fafafa" }}>
-                        {measurementSchema === "dimension" && (
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 140px", gap: 12 }}>
-                            <Inp label="Length" value={v.dimensionLength || ""} onChange={val => updateVariant(v.id, "dimensionLength", val)} placeholder="L" />
-                            <Inp label="Breadth" value={v.dimensionBreadth || ""} onChange={val => updateVariant(v.id, "dimensionBreadth", val)} placeholder="B" />
-                            <Inp label="Height" value={v.dimensionHeight || ""} onChange={val => updateVariant(v.id, "dimensionHeight", val)} placeholder="H" />
-                            <DD label="Unit" value={v.dimensionUnit || "mm"} onChange={val => updateVariant(v.id, "dimensionUnit", val)} options={DIMENSION_UNITS} placeholder="Select unit" />
-                          </div>
-                        )}
-                        {measurementSchema === "ring" && (
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                            <Inp label="Inner diameter (mm)" value={v.ringInnerDiameter || ""} onChange={val => updateVariant(v.id, "ringInnerDiameter", val)} placeholder="e.g. 18" />
-                            <DD label="Diamond Ring" value={v.isDiamondRing || "no"} onChange={val => updateVariant(v.id, "isDiamondRing", val)} options={["yes", "no"]} placeholder="Select" />
-                            {v.isDiamondRing === "yes" && <>
-                              <Inp label="Diamond Shape" value={v.diamondShape || ""} onChange={val => updateVariant(v.id, "diamondShape", val)} placeholder="e.g. Round, Princess" />
-                              <Inp label="Carat Size (mm)" value={v.diamondCaratSize || ""} onChange={val => updateVariant(v.id, "diamondCaratSize", val)} placeholder="e.g. 6.5" />
-                            </>}
-                          </div>
-                        )}
-                        {measurementSchema === "watch" && (
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                            <Inp label="Case diameter (mm)" value={v.watchCaseDiameter || ""} onChange={val => updateVariant(v.id, "watchCaseDiameter", val)} placeholder="e.g. 44" />
-                            <Inp label="Lug-to-lug (mm)" value={v.watchLugToLug || ""} onChange={val => updateVariant(v.id, "watchLugToLug", val)} placeholder="e.g. 48" />
-                            <Inp label="Case thickness (mm)" value={v.watchCaseThickness || ""} onChange={val => updateVariant(v.id, "watchCaseThickness", val)} placeholder="e.g. 12" />
-                            <Inp label="Strap type" value={v.watchStrapType || ""} onChange={val => updateVariant(v.id, "watchStrapType", val)} placeholder="e.g. Leather" />
-                          </div>
-                        )}
-                        {has3D && <div style={{ marginTop: 12 }}><UBox small label="Upload 3D model" /></div>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
+        {/* variant count hint (shown while editing options) */}
+        {variants.length > 0 && editingOption && (
+          <div style={{ fontSize: 12.5, color: "#999", marginBottom: 8 }}>{variants.length} variant{variants.length !== 1 ? "s" : ""} generated</div>
         )}
 
       </div>}
@@ -2202,6 +2336,253 @@ function VariantEditor({ variantOptions, setVariantOptions, variants, setVariant
           </div>
         </div>
       )}
+    </div>
+
+    {variants.length > 0 && !editingOption && (
+      <>
+        {/* ── Variant Mapping ── */}
+        <div style={{ ...S.card, marginBottom: 22, overflow: "visible" }}>
+          <div style={{ padding: "18px 24px 14px", borderBottom: "1px solid #f2f2f2" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: -0.2, marginBottom: 14 }}>Variant Mapping</div>
+            {vmFilterOptions.length > 0 && (
+              <div ref={vmFilterBarRef} style={{ position: "relative" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button style={vmFilterPillGhost} onClick={clearAllVmFilters}>
+                    <span style={{ fontSize: 14, lineHeight: "20px", color: "#5a5a5a" }}>All</span>
+                  </button>
+                  {vmFilterOptions.map((optionName) => {
+                    const selectedValues = vmFilterSelections[optionName] || [];
+                    const selectedCount = selectedValues.length;
+                    const isPopoverOpen = vmActivePopoverOption === optionName;
+                    return (
+                      <button
+                        key={optionName}
+                        ref={(element) => setVmOptionButtonRef(optionName, element)}
+                        style={{
+                          ...(selectedCount > 0 ? vmFilterPillSelected : vmFilterPillGhost),
+                          borderColor: isPopoverOpen ? "#c6c6c6" : selectedCount > 0 ? "#e0e0e0" : "#d0d0d0",
+                        }}
+                        onClick={() => {
+                          if (isPopoverOpen) {
+                            setVmActivePopoverOption("");
+                            return;
+                          }
+                          setVmActivePopoverOption(optionName);
+                          requestAnimationFrame(() => updateVmPopoverPosition(optionName));
+                        }}
+                      >
+                        {selectedCount <= 1 ? (
+                          <>
+                            <span style={{ fontSize: 14, lineHeight: "20px", color: "#5a5a5a" }}>{selectedCount === 1 ? `${optionName}:` : optionName}</span>
+                            {selectedCount === 1 && <span style={{ fontSize: 14, lineHeight: "20px", color: "#141414" }}>{selectedValues[0]}</span>}
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ fontSize: 14, lineHeight: "20px", color: "#5a5a5a" }}>{optionName}</span>
+                            <span style={{ background: "#fcebf4", borderRadius: 16, padding: "1px 6px", color: "#8f0941", fontSize: 11, lineHeight: "14px", minWidth: 16, textAlign: "center" }}>{selectedCount}</span>
+                          </>
+                        )}
+                        <ChevronDown size={14} color="#5a5a5a" />
+                      </button>
+                    );
+                  })}
+                  <button style={{ ...vmFilterPillGhost, padding: "0 12px 0 10px" }} onClick={() => setVmActivePopoverOption("")}>
+                    <Plus size={14} color="#5a5a5a" />
+                    <span style={{ fontSize: 14, lineHeight: "20px", color: "#5a5a5a" }}>More</span>
+                  </button>
+                </div>
+                {vmActivePopoverOption && (vmFilterValuesByOption[vmActivePopoverOption] || []).length > 0 && (
+                  <div ref={vmPopoverRef} style={{ position: "absolute", left: vmPopoverLeft, top: "calc(100% + 12px)", transform: "translateX(-50%)", width: 290, maxWidth: "90vw", background: "#fff", borderRadius: 16, border: "1px solid #ffffff", boxShadow: "0 4px 16px rgba(0,0,0,0.16)", zIndex: 20, overflow: "hidden" }}>
+                    <div style={{ position: "absolute", top: -6, left: "50%", transform: "translateX(-50%) rotate(45deg)", width: 12, height: 12, background: "#fff", borderLeft: "1px solid #ffffff", borderTop: "1px solid #ffffff" }} />
+                    <div style={{ padding: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5 }}>
+                      {(vmFilterValuesByOption[vmActivePopoverOption] || []).map((value) => {
+                        const selected = (vmFilterSelections[vmActivePopoverOption] || []).includes(value);
+                        return (
+                          <button
+                            key={`${vmActivePopoverOption}-${value}`}
+                            style={{
+                              height: 30,
+                              borderRadius: 999,
+                              border: selected ? "1px solid #e0e0e0" : "1px dashed #e0e0e0",
+                              background: selected ? "#f0f0f0" : "#fff",
+                              color: "#5a5a5a",
+                              fontSize: 14,
+                              lineHeight: "20px",
+                              padding: "0 12px",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => toggleVmOptionValue(vmActivePopoverOption, value)}
+                          >
+                            {value}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...S.th, width: 44, paddingLeft: 20 }}><input type="checkbox" style={{ cursor: "pointer" }} /></th>
+                  <th style={{ ...S.th }}><div style={{ display: "flex", alignItems: "center", gap: 6 }}>Variant <IcSort /></div></th>
+                  <th style={{ ...S.th }}>SKU ID</th>
+                  {showMeasurementCols && renderMeasurementHeaders()}
+                  {!showMeasurementCols && !has3D && <>
+                    <th style={{ ...S.th }}>Cost ₹</th>
+                    <th style={{ ...S.th }}>Sell ₹</th>
+                  </>}
+                  {has3D && <th style={{ ...S.th }}>3D file</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {vmRows.map(v => (
+                  <tr key={v.id}>
+                    <td style={{ ...S.td, paddingLeft: 20, width: 44 }}><input type="checkbox" style={{ cursor: "pointer" }} /></td>
+                    <td style={{ ...S.td, fontWeight: 500 }}>{v.name}</td>
+                    <td style={{ ...S.td }}>
+                      <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 120 }} value={v.variantId || ""} onChange={e => updateVariant(v.id, "variantId", e.target.value)} placeholder="001"
+                        onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                    </td>
+                    {showMeasurementCols && renderMeasurementCells(v)}
+                    {!showMeasurementCols && !has3D && <>
+                      <td style={{ ...S.td }}>
+                        <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 110 }} value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)} placeholder="₹"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                      </td>
+                      <td style={{ ...S.td }}>
+                        <input style={{ ...S.input, height: 34, fontSize: 12.5, width: 110 }} value={v.sellingPrice || ""} onChange={e => updateVariant(v.id, "sellingPrice", e.target.value)} placeholder="₹"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                      </td>
+                    </>}
+                    {has3D && (
+                      <td style={{ ...S.td }}>
+                        <label style={{ width: 36, height: 36, borderRadius: 9, border: "1.5px dashed #f43f5e", background: "#fff5f6", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                          <Upload size={14} color="#f43f5e" />
+                          <input type="file" accept=".glb,.gltf,.fbx,.obj" style={{ display: "none" }} />
+                        </label>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── Pricing Mapping ── */}
+        <div style={{ ...S.card, marginBottom: 22, overflow: "hidden" }}>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 24px", borderBottom: pmSelectedOptions.length > 0 ? "1px solid #f2f2f2" : "none" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: -0.2 }}>Pricing Mapping</div>
+            {filterTabs.length > 1 && pmSelectedOptions.length === 0 && (
+              <button className="glamar-btn glamar-btn-primary" style={{ padding: "0 20px" }}
+                onClick={() => { setPmModalSelection(filterTabs.slice(1).find(t => !pmSelectedOptions.includes(t)) || ""); setPmModalOpen(true); }}>
+                Add
+              </button>
+            )}
+          </div>
+
+          {/* Configured state */}
+          {pmSelectedOptions.length > 0 && (
+            <div style={{ padding: "18px 24px 0" }}>
+              {/* Base price */}
+              <div style={{ background: "#f5f5f5", borderRadius: 12, padding: "16px 20px", marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#444", marginBottom: 10 }}>Base price</div>
+                <input style={{ ...S.input }} value={basePrice} onChange={e => setBasePrice(e.target.value)} placeholder="$ 0"
+                  onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+              </div>
+              {/* Filter tabs — only the user-selected options */}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                {pmSelectedOptions.map(t => (
+                  <button key={t} style={tabPill(pmFilter === t)} onClick={() => setPmFilter(t)}>{t}</button>
+                ))}
+                {/* + More: only if there are un-added options */}
+                {filterTabs.slice(1).some(t => !pmSelectedOptions.includes(t)) && (
+                  <button style={tabPill(false)}
+                    onClick={() => { setPmModalSelection(filterTabs.slice(1).find(t => !pmSelectedOptions.includes(t)) || ""); setPmModalOpen(true); }}>
+                    + More
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Table */}
+          {pmSelectedOptions.length > 0 && pmFilter && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...S.th, width: 44, paddingLeft: 20 }}><input type="checkbox" style={{ cursor: "pointer" }} /></th>
+                    <th style={{ ...S.th }}><div style={{ display: "flex", alignItems: "center", gap: 6 }}>Variant <IcSort /></div></th>
+                    <th style={{ ...S.th }}>Additional Pricing</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pmRows.map(v => (
+                    <tr key={v.id}>
+                      <td style={{ ...S.td, paddingLeft: 20, width: 44 }}><input type="checkbox" style={{ cursor: "pointer" }} /></td>
+                      <td style={{ ...S.td, fontWeight: 500 }}>{v.name}</td>
+                      <td style={{ ...S.td }}>
+                        <input style={{ ...S.input, height: 34, fontSize: 12.5 }} value={v.costPrice || ""} onChange={e => updateVariant(v.id, "costPrice", e.target.value)} placeholder="Placeholder Text"
+                          onFocus={e => e.target.style.borderColor = "#f43f5e"} onBlur={e => e.target.style.borderColor = "#d9d9d9"} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* ── Pricing Mapping Modal ── */}
+        {pmModalOpen && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
+            onClick={() => setPmModalOpen(false)}>
+            <div style={{ background: "#fff", borderRadius: 16, width: 480, maxWidth: "90vw", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}
+              onClick={e => e.stopPropagation()}>
+              {/* Modal header */}
+              <div style={{ background: "#f5f5f5", padding: "20px 24px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Pricing Mapping</div>
+                <button onClick={() => setPmModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#888" }}><X size={18} /></button>
+              </div>
+              {/* Modal body */}
+              <div style={{ padding: "24px 24px 20px" }}>
+                <label style={{ ...S.label, color: "#888", fontWeight: 400 }}>Option name</label>
+                <div style={{ position: "relative" }}>
+                  <select value={pmModalSelection} onChange={e => setPmModalSelection(e.target.value)}
+                    style={{ ...S.select, height: 48, fontSize: 14 }}>
+                    {filterTabs.slice(1).filter(t => !pmSelectedOptions.includes(t)).map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={16} color="#888" style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                </div>
+              </div>
+              {/* Modal footer */}
+              <div style={{ padding: "0 24px 24px", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={() => setPmModalOpen(false)}
+                  style={{ background: "#fff", color: "#f43f5e", border: "1.5px solid #f43f5e", borderRadius: 24, padding: "9px 24px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={() => {
+                  if (!pmModalSelection) return;
+                  setPmSelectedOptions(prev => prev.includes(pmModalSelection) ? prev : [...prev, pmModalSelection]);
+                  setPmFilter(pmModalSelection);
+                  setPmModalOpen(false);
+                }} className="glamar-btn glamar-btn-primary" style={{ borderRadius: 24, padding: "9px 24px" }}>
+                  Select
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    )}
     </div>
   );
 }
@@ -2994,6 +3375,72 @@ function GsSectionHeader({ id, label, icon: Icon, help, expanded, onToggle }) {
   );
 }
 
+// Range slider with two handles: value is [left, right] each 0–100
+// left = 0 maps to -180°, right = 100 maps to +180°
+function CameraRangeSlider({ label, value, onChange }) {
+  const [left, right] = value;
+  const trackRef = useRef(null);
+  const dragging = useRef(null);
+
+  const fillLeft = Math.min(left, right);
+  const fillWidth = Math.abs(right - left);
+  const leftDeg = Math.round((left / 100) * 360 - 180);
+  const rightDeg = Math.round((right / 100) * 360 - 180);
+
+  const getPct = (clientX) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    return Math.min(100, Math.max(0, Math.round(((clientX - rect.left) / rect.width) * 100)));
+  };
+
+  const onTrackPointerDown = (e) => {
+    e.preventDefault();
+    trackRef.current.setPointerCapture(e.pointerId);
+    const pct = getPct(e.clientX);
+    // Pick the closer handle
+    dragging.current = Math.abs(pct - left) <= Math.abs(pct - right) ? "left" : "right";
+    if (dragging.current === "left") onChange([pct, right]);
+    else onChange([left, pct]);
+  };
+
+  const onTrackPointerMove = (e) => {
+    if (!dragging.current) return;
+    const pct = getPct(e.clientX);
+    if (dragging.current === "left") onChange([pct, right]);
+    else onChange([left, pct]);
+  };
+
+  const onTrackPointerUp = () => { dragging.current = null; };
+
+  const TICK_COUNT = 10;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 12, color: "#5a5a5a", lineHeight: "16px" }}>{label}</span>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <div style={{ background: "#fff", border: "1px solid #e0e0e0", borderRadius: 4, padding: "2px 6px", width: 56, fontSize: 13, color: "#141414", textAlign: "center" }}>{leftDeg}°</div>
+        <div style={{ background: "#fff", border: "1px solid #e0e0e0", borderRadius: 4, padding: "2px 6px", width: 56, fontSize: 13, color: "#141414", textAlign: "center" }}>{rightDeg}°</div>
+      </div>
+      <div
+        ref={trackRef}
+        onPointerDown={onTrackPointerDown}
+        onPointerMove={onTrackPointerMove}
+        onPointerUp={onTrackPointerUp}
+        style={{ position: "relative", height: 20, display: "flex", alignItems: "center", cursor: "pointer", touchAction: "none" }}
+      >
+        <div style={{ position: "absolute", left: 0, right: 0, height: 2, background: "#e0e0e0", borderRadius: 8 }} />
+        <div style={{ position: "absolute", left: `${fillLeft}%`, width: `${fillWidth}%`, height: 2, background: "#da0e64", borderRadius: 8 }} />
+        <div style={{ position: "absolute", left: `calc(${left}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", zIndex: 2 }} />
+        <div style={{ position: "absolute", left: `calc(${right}% - 8px)`, width: 16, height: 16, background: "#fff", borderRadius: "50%", border: "1px solid #e0e0e0", boxShadow: "0 1px 2px rgba(0,0,0,0.08)", zIndex: 2 }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        {Array.from({ length: TICK_COUNT }).map((_, i) => (
+          <div key={i} style={{ width: 1, height: 6, background: "#b5b5b5" }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TransformationControlGroup({ title, onReset, rows }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -3102,7 +3549,6 @@ const GS_STUDIO_LIGHTS = [
 
 function GeneralSettingsPanel({ mode = "3d", initialArSettings = null, onArSettingsChange }) {
   const [tplExpanded, setTplExpanded] = useState(true);
-  const [settingsExpanded, setSettingsExpanded] = useState(true);
   const [selectedTpl, setSelectedTpl] = useState("s1");
   const [expandedSections, setExpandedSections] = useState({});
 
@@ -3137,6 +3583,9 @@ function GeneralSettingsPanel({ mode = "3d", initialArSettings = null, onArSetti
   // Camera animation
   const [camTemplate, setCamTemplate] = useState("Default 360 rotation");
   const [camSpeed, setCamSpeed] = useState("1x");
+  const [camZoom, setCamZoom] = useState(0);
+  const [camAdjustLR, setCamAdjustLR] = useState([50, 50]);
+  const [camAdjustUD, setCamAdjustUD] = useState([50, 50]);
 
   const toggleSection = (id) => setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -3241,21 +3690,6 @@ function GeneralSettingsPanel({ mode = "3d", initialArSettings = null, onArSetti
             ))}
           </div>
         )}
-      </div>
-
-      {/* Settings row */}
-      <div style={{ borderBottom: "1px solid #f0f0f0" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 20px", cursor: "pointer", userSelect: "none" }}
-          onClick={() => setSettingsExpanded(v => !v)}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Settings size={15} color="#555" strokeWidth={1.8} />
-            <span style={{ fontSize: 13.5, fontWeight: 600, color: "#222" }}>Settings</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 12.5, color: "#f43f5e", fontWeight: 500 }}>Reset</span>
-            {settingsExpanded ? <ChevronUp size={15} color="#aaa" /> : <ChevronDown size={15} color="#aaa" />}
-          </div>
-        </div>
       </div>
 
       {/* ── Model animation ── */}
@@ -3402,9 +3836,28 @@ function GeneralSettingsPanel({ mode = "3d", initialArSettings = null, onArSetti
         <GsSectionHeader id="cameraAnimation" label="Camera animation" icon={Camera} expanded={expandedSections.cameraAnimation} onToggle={toggleSection} />
         {expandedSections.cameraAnimation && (
           <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Zoom */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13, color: "#5a5a5a" }}>Zoom</span>
+                <button onClick={() => setCamZoom(0)} style={{ background: "none", border: "none", cursor: "pointer", color: "#8f0941", fontSize: 12, fontWeight: 500, padding: 0, lineHeight: "16px" }}>Reset</button>
+              </div>
+              <GsSliderRow label="In or Out" value={camZoom} onChange={setCamZoom} min={-100} max={100} />
+            </div>
+
             <GsSelectField label="Choose template" value={camTemplate} onChange={setCamTemplate}
               options={["Default 360 rotation", "Slow pan", "Orbit", "Zoom in", "Static"]} />
             <GsSpeedSelector value={camSpeed} onChange={setCamSpeed} />
+
+            {/* Adjust camera */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13, color: "#5a5a5a" }}>Adjust camera</span>
+                <button onClick={() => { setCamAdjustLR([50, 50]); setCamAdjustUD([50, 50]); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#8f0941", fontSize: 12, fontWeight: 500, padding: 0, lineHeight: "16px" }}>Reset</button>
+              </div>
+              <CameraRangeSlider label="Left and Right" value={camAdjustLR} onChange={setCamAdjustLR} />
+              <CameraRangeSlider label="Up and Down" value={camAdjustUD} onChange={setCamAdjustUD} />
+            </div>
           </div>
         )}
       </div>
@@ -3441,7 +3894,8 @@ function StudioCreateProductModal({
   const selectedCategoryKey = getCategoryLookupKey(headCategory, form.category, form.subcategory);
   const show2DToggle = catData?.sides2D !== null;
   const has3D = Boolean(catData && selectedCategoryKey && catData.modelling3D?.[selectedCategoryKey]);
-  const canContinue = getStudioPopupCanContinue({ ...form, productUrl: importLink }, headCategory);
+  const productIdRequired = !editProduct?.variants?.length;
+  const canContinue = getStudioPopupCanContinue({ ...form, productUrl: importLink }, headCategory, editProduct);
 
   const updateForm = (key, val) => {
     const next = { ...form, [key]: val };
@@ -3552,7 +4006,7 @@ function StudioCreateProductModal({
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-              <Inp label="Product ID" value={form.skuId} onChange={v => updateForm("skuId", v)} placeholder="e.g. SKU-001" required />
+              <Inp label="Product ID" value={form.skuId} onChange={v => updateForm("skuId", v)} placeholder="e.g. SKU-001" required={productIdRequired} />
               <Inp label="Product name" value={form.productName} onChange={v => updateForm("productName", v)} placeholder="Enter product name" required />
             </div>
 
@@ -3756,36 +4210,27 @@ function StudioQuestionEditor({ question, onChange, onDelete }) {
         <DD label="Display type" value={question.studioConfig?.displayType || "text"} onChange={value => patchStudioConfig({ displayType: value })} options={displayTypeOptions} placeholder="Select display type" />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div>
-          <label style={S.label}>Role</label>
-          <div style={{ display: "flex", background: "#f2f2f2", borderRadius: 12, padding: 4 }}>
-            {["configurator", "sku"].map((role) => {
-              const active = (question.optionRole || "configurator") === role;
-              return (
-                <button
-                  key={role}
-                  onClick={() => patchQuestion({ optionRole: role })}
-                  style={{ flex: 1, height: 36, border: "none", borderRadius: 10, background: active ? "#fff" : "transparent", color: active ? "#da0e64" : "#666", fontWeight: active ? 600 : 500, cursor: "pointer", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}
-                >
-                  {role === "configurator" ? "Configurator" : "SKU"}
-                </button>
-              );
-            })}
+      <div style={{ display: "grid", gridTemplateColumns: question.valueType === "image" ? "1fr 1fr 1fr" : "1fr 1fr", gap: 16 }}>
+        <div style={{ border: "1px solid #ececec", borderRadius: 12, padding: "12px 14px", background: "#fff" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#777", textTransform: "uppercase", letterSpacing: 0.4 }}>Variant mapping</div>
+          <div style={{ fontSize: 13.5, color: "#141414", marginTop: 8, fontWeight: 600 }}>
+            {question.valueType === "text"
+              ? "Text questions stay configurator-only"
+              : question.optionRole === "sku"
+                ? "Included in variant mapping"
+                : "Use Map Variant to include this option"}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 18 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flex: 1, border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
-            <span style={{ fontSize: 13.5, color: "#444" }}>Show name label</span>
-            <Tog on={question.studioConfig?.showNameLabel ?? true} onToggle={() => patchStudioConfig({ showNameLabel: !(question.studioConfig?.showNameLabel ?? true) })} />
-          </div>
-          {question.valueType === "image" && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flex: 1, border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
-              <span style={{ fontSize: 13.5, color: "#444" }}>Large thumbnail</span>
-              <Tog on={question.studioConfig?.largeThumbnail ?? false} onToggle={() => patchStudioConfig({ largeThumbnail: !(question.studioConfig?.largeThumbnail ?? false) })} />
-            </div>
-          )}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
+          <span style={{ fontSize: 13.5, color: "#444" }}>Show name label</span>
+          <Tog on={question.studioConfig?.showNameLabel ?? true} onToggle={() => patchStudioConfig({ showNameLabel: !(question.studioConfig?.showNameLabel ?? true) })} />
         </div>
+        {question.valueType === "image" && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid #ececec", borderRadius: 12, padding: "10px 12px" }}>
+            <span style={{ fontSize: 13.5, color: "#444" }}>Large thumbnail</span>
+            <Tog on={question.studioConfig?.largeThumbnail ?? false} onToggle={() => patchStudioConfig({ largeThumbnail: !(question.studioConfig?.largeThumbnail ?? false) })} />
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3937,11 +4382,10 @@ function StudioProductSetupAccordion({ headCategory, draftProduct, setupForm, se
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <Inp label="Default cost price" value={setupForm.costPrice || ""} onChange={value => updateSetup({ costPrice: value })} placeholder="Rs. 0.00" />
-            <Inp label="Default selling price" value={setupForm.sellingPrice || ""} onChange={value => updateSetup({ sellingPrice: value })} placeholder="Rs. 0.00" />
+            <Inp label="Barcode" value={setupForm.additionalFields?.barcode || ""} onChange={value => updateAdditionalField("barcode", value)} placeholder="Enter barcode" />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <Inp label="Barcode" value={setupForm.additionalFields?.barcode || ""} onChange={value => updateAdditionalField("barcode", value)} placeholder="Enter barcode" />
+          <div>
             <Inp label="Product URL" value={setupForm.productUrl || ""} onChange={value => updateSetup({ productUrl: value })} placeholder="Enter product URL" />
           </div>
         </div>
@@ -3950,159 +4394,687 @@ function StudioProductSetupAccordion({ headCategory, draftProduct, setupForm, se
   );
 }
 
-function StudioVariantCombinationsModal({ open, options, selectedNames, onClose, onCreate }) {
-  const [selected, setSelected] = useState(() => new Set(selectedNames));
-  const eligibleOptions = options.filter(option => option.valueType !== "text");
+function StudioVariantOptionModal({ open, onClose, onSave }) {
+  const createEmptyValue = (valueType) => (
+    valueType === "color"
+      ? { label: "", color: "#b56d5c" }
+      : valueType === "image"
+        ? { label: "", image: "" }
+        : { label: "" }
+  );
+  const [draft, setDraft] = useState({ name: "", valueType: "color", values: [createEmptyValue("color")] });
 
   useEffect(() => {
     if (!open) return;
-    setSelected(new Set(selectedNames));
-  }, [open, selectedNames]);
+    setDraft({ name: "", valueType: "color", values: [createEmptyValue("color")] });
+  }, [open]);
 
   if (!open) return null;
 
-  const toggle = (name) => setSelected(prev => {
-    const next = new Set(prev);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    return next;
-  });
+  const setValueType = (nextType) => {
+    setDraft(prev => ({
+      ...prev,
+      valueType: nextType,
+      values: normalizeStudioValuesForType(prev.values.length ? prev.values : [createEmptyValue(nextType)], nextType),
+    }));
+  };
+
+  const updateValue = (index, patch) => {
+    setDraft(prev => ({
+      ...prev,
+      values: prev.values.map((value, valueIndex) => valueIndex === index ? { ...value, ...patch } : value),
+    }));
+  };
+
+  const addValueRow = () => {
+    setDraft(prev => ({ ...prev, values: [...prev.values, createEmptyValue(prev.valueType)] }));
+  };
+
+  const removeValue = (index) => {
+    setDraft(prev => ({ ...prev, values: prev.values.filter((_, valueIndex) => valueIndex !== index) }));
+  };
+
+  const normalizedValues = (draft.values || [])
+    .filter((value) => getVariantValueLabel(value).trim())
+    .map((value) => (
+      draft.valueType === "color"
+        ? { label: getVariantValueLabel(value).trim(), color: value.color || "#b56d5c" }
+        : draft.valueType === "image"
+          ? { label: getVariantValueLabel(value).trim(), image: value.image || "" }
+          : { label: getVariantValueLabel(value).trim() }
+    ))
+    .filter((value) => draft.valueType !== "image" || !!value.image);
+
+  const canSave = !!draft.name.trim() && normalizedValues.length > 0;
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.4)", zIndex: 1300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ width: 720, maxWidth: "100%", background: "#fff", borderRadius: 24, boxShadow: "0 28px 70px rgba(20,20,20,0.22)", overflow: "hidden" }}>
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid #ededed", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#141414" }}>Create variants</div>
-            <div style={{ fontSize: 13, color: "#7b7b7b", marginTop: 4 }}>Choose which questions should generate SKU combinations. Text-only questions stay configurator-only.</div>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.42)", zIndex: 1320, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: 980, maxWidth: "100%", background: "#fff", borderRadius: 26, boxShadow: "0 30px 80px rgba(20,20,20,0.24)", overflow: "hidden" }}>
+        <div style={{ padding: "22px 40px 10px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#1e1e1e" }}>Add Variant</div>
+            <button onClick={onClose} style={{ width: 34, height: 34, borderRadius: "50%", border: "none", background: "#f3f3f3", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <X size={16} color="#666" />
+            </button>
           </div>
-          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "#f5f5f5", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <X size={16} color="#666" />
-          </button>
-        </div>
-        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
-          {eligibleOptions.length === 0 ? (
-            <div style={{ ...S.card, padding: 18, fontSize: 13.5, color: "#8b8b8b" }}>Add color or image questions in the configurator first. Text questions can’t be used to generate variants.</div>
-          ) : eligibleOptions.map(option => {
-            const active = selected.has(option.name);
-            return (
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+            {[
+              { id: "color", label: "Color" },
+              { id: "image", label: "Image" },
+              { id: "text", label: "Text" },
+            ].map((type) => {
+              const active = draft.valueType === type.id;
+              return (
+                <button
+                  key={type.id}
+                  onClick={() => setValueType(type.id)}
+                  style={{ height: 34, padding: "0 14px", borderRadius: 999, border: `1px solid ${active ? "#da0e64" : "#e2e2e2"}`, background: active ? "#fff0f6" : "#fff", color: active ? "#8f0941" : "#555", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                >
+                  {type.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ background: "#f7f7f7", borderRadius: 24, padding: 24, display: "flex", flexDirection: "column", gap: 24 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 20, fontWeight: 700, color: "#222", marginBottom: 14 }}>Option Name</label>
+              <input
+                style={{ ...S.input, height: 62, fontSize: 22, borderRadius: 16 }}
+                value={draft.name}
+                onChange={(e) => setDraft(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="Option name"
+              />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 20, fontWeight: 700, color: "#222", marginBottom: 18 }}>Option Value</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {(draft.values || []).map((value, index) => (
+                  <div key={`draft-value-${index}`} style={{ display: "grid", gridTemplateColumns: draft.valueType === "text" ? "24px minmax(0, 1fr) 32px" : "24px 76px minmax(0, 1fr) 32px", gap: 14, alignItems: "center" }}>
+                    <GripVertical size={18} color="#666" />
+                    {draft.valueType === "color" && (
+                      <label style={{ width: 60, height: 60, borderRadius: 16, background: value.color || "#b56d5c", cursor: "pointer", overflow: "hidden", position: "relative" }}>
+                        <input type="color" value={value.color || "#b56d5c"} onChange={(e) => updateValue(index, { color: e.target.value })} style={{ position: "absolute", width: "200%", height: "200%", top: "-50%", left: "-50%", opacity: 0, cursor: "pointer" }} />
+                      </label>
+                    )}
+                    {draft.valueType === "image" && (
+                      <label style={{ width: 60, height: 60, borderRadius: 16, border: "1px dashed #d4d4d4", background: value.image ? "transparent" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", cursor: "pointer" }}>
+                        {value.image ? <img src={value.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Upload size={16} color="#bbb" />}
+                        <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) updateValue(index, { image: URL.createObjectURL(file) });
+                        }} />
+                      </label>
+                    )}
+                    <input
+                      style={{ ...S.input, height: 60, borderRadius: 16, fontSize: 22, background: "#fff" }}
+                      value={getVariantValueLabel(value)}
+                      onChange={(e) => updateValue(index, { label: e.target.value })}
+                      placeholder="Value"
+                    />
+                    {index === draft.values.length - 1 ? (
+                      <button onClick={addValueRow} style={{ width: 32, height: 32, border: "none", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Plus size={20} color="#555" />
+                      </button>
+                    ) : (
+                      <button onClick={() => removeValue(index)} style={{ width: 32, height: 32, border: "none", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <X size={20} color="#555" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {(draft.values || []).filter((value) => getVariantValueLabel(value).trim()).length > 0 && (
+              <div style={{ background: "#fff", borderRadius: 22, padding: "18px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: "#1f1f1f" }}>{draft.name || "Option preview"}</span>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {(draft.values || []).filter((value) => getVariantValueLabel(value).trim()).map((value, index) => (
+                      <div key={`preview-${index}`} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 12, border: "1px solid #dedede", background: "#fff" }}>
+                        {draft.valueType === "color" && <div style={{ width: 14, height: 14, borderRadius: "50%", background: value.color || "#b56d5c" }} />}
+                        {draft.valueType === "image" && value.image && <img src={value.image} alt="" style={{ width: 18, height: 18, borderRadius: 6, objectFit: "cover" }} />}
+                        <span style={{ fontSize: 14, color: "#333" }}>{getVariantValueLabel(value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <ChevronDown size={20} color="#666" />
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
               <button
-                key={option.name}
-                onClick={() => toggle(option.name)}
-                style={{ width: "100%", border: `1.5px solid ${active ? "#3b82f6" : "#e5e7eb"}`, background: active ? "#eff6ff" : "#fff", borderRadius: 16, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                className="glamar-btn glamar-btn-primary"
+                disabled={!canSave}
+                onClick={() => onSave({
+                  name: draft.name.trim(),
+                  valueType: draft.valueType,
+                  optionRole: "configurator",
+                  values: normalizedValues,
+                })}
               >
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: active ? "#1d4ed8" : "#141414" }}>{option.name}</div>
-                  <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>{option.values?.length || 0} answers available</div>
-                </div>
-                <div style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${active ? "#3b82f6" : "#d1d5db"}`, background: active ? "#3b82f6" : "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {active && <Check size={14} color="#fff" />}
-                </div>
+                Done
               </button>
-            );
-          })}
-        </div>
-        <div style={{ padding: "16px 24px", borderTop: "1px solid #ededed", display: "flex", justifyContent: "flex-end", gap: 12 }}>
-          <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="glamar-btn glamar-btn-primary" disabled={selected.size === 0} onClick={() => onCreate(Array.from(selected))}>Create</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function StudioVariantCombinationsPanel({ variantOptions, setVariantOptions, variants, setVariants, measurementSchema, onDirtyChange }) {
-  const [showModal, setShowModal] = useState(false);
-  const skuOptions = variantOptions.filter(option => option.optionRole !== "configurator" && option.valueType !== "text");
+function StudioVariantCombinationsModal({ open, options, selectedNames, onClose, onCreate }) {
+  const eligibleOptions = options.filter((option) => option.valueType !== "text");
+  const [selectedRows, setSelectedRows] = useState([]);
+
+  useEffect(() => {
+    if (!open) return;
+    const initialRows = selectedNames.filter((name) => eligibleOptions.some((option) => option.name === name));
+    setSelectedRows(initialRows.length ? initialRows : (eligibleOptions[0] ? [eligibleOptions[0].name] : []));
+  }, [open, selectedNames, options]);
+
+  if (!open) return null;
+
+  const selectedOptions = selectedRows.map((name) => eligibleOptions.find((option) => option.name === name)).filter(Boolean);
+  const totalVariants = countStudioVariantCombinations(selectedOptions);
+  const canAddAnother = selectedRows.length < eligibleOptions.length;
+
+  const getAvailableOptions = (rowIndex) => eligibleOptions.filter((option) => (
+    option.name === selectedRows[rowIndex]
+      || !selectedRows.some((name, index) => index !== rowIndex && name === option.name)
+  ));
+
+  const updateRow = (rowIndex, nextName) => {
+    setSelectedRows((prev) => prev.map((name, index) => index === rowIndex ? nextName : name));
+  };
+
+  const removeRow = (rowIndex) => {
+    setSelectedRows((prev) => prev.filter((_, index) => index !== rowIndex));
+  };
+
+  const canCreate = selectedOptions.length > 0 && totalVariants > 0;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.42)", zIndex: 1310, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: 900, maxWidth: "100%", background: "#fff", borderRadius: 22, boxShadow: "0 24px 70px rgba(20,20,20,0.2)", overflow: "hidden" }}>
+        <div style={{ padding: 28 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #dfe6ff", boxShadow: "0 6px 18px rgba(59,130,246,0.08)", borderRadius: 18, padding: "16px 18px", color: "#667085" }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#eef2ff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Info size={18} color="#315efb" />
+            </div>
+            <span style={{ fontSize: 16, fontWeight: 500 }}>Text field questions cannot be used to create variants</span>
+          </div>
+
+          <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 16 }}>
+            {eligibleOptions.length === 0 ? (
+              <div style={{ ...S.card, padding: 20, fontSize: 14, color: "#888", lineHeight: 1.6 }}>
+                Add a color or image option first. Once an option has answers, you can combine it here to create variant mappings.
+              </div>
+            ) : (
+              <>
+                {selectedRows.map((name, rowIndex) => {
+                  const selectedOption = eligibleOptions.find((option) => option.name === name);
+                  const answerCount = selectedOption ? countStudioOptionAnswers(selectedOption) : 0;
+                  return (
+                    <div key={`variant-map-row-${rowIndex}`} style={{ display: "grid", gridTemplateColumns: "minmax(0, 520px) auto", gap: 18, alignItems: "center" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 64px", gap: 12, alignItems: "center" }}>
+                        <div style={{ position: "relative" }}>
+                          <select style={{ ...S.select, height: 74, borderRadius: 18, fontSize: 22, fontWeight: 600 }} value={name} onChange={(e) => updateRow(rowIndex, e.target.value)}>
+                            {getAvailableOptions(rowIndex).map((option) => <option key={option.name} value={option.name}>{option.name}</option>)}
+                          </select>
+                          <ChevronDown size={24} color="#667085" style={{ position: "absolute", right: 20, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                        </div>
+                        <button onClick={() => removeRow(rowIndex)} style={{ width: 64, height: 64, borderRadius: 16, border: "1px solid #ececec", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <X size={24} color="#4b5563" />
+                        </button>
+                      </div>
+                      <div style={{ justifySelf: "end", textAlign: "right", minWidth: 150 }}>
+                        {selectedOption && (
+                          <div style={{ fontSize: 16, color: "#344054" }}>
+                            {rowIndex > 0 && <span style={{ color: "#101828", marginRight: 8 }}>x</span>}
+                            {answerCount} answer{answerCount === 1 ? "" : "s"}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <button
+                  onClick={() => canAddAnother && setSelectedRows((prev) => [...prev, eligibleOptions.find((option) => !prev.includes(option.name))?.name || ""])}
+                  disabled={!canAddAnother}
+                  style={{ width: "fit-content", height: 54, padding: "0 20px", borderRadius: 14, border: "1px solid #e3e3e3", background: canAddAnother ? "#fff" : "#f7f7f7", color: canAddAnother ? "#111827" : "#b3b3b3", cursor: canAddAnother ? "pointer" : "not-allowed", fontSize: 18, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 12, boxShadow: "0 2px 10px rgba(0,0,0,0.04)" }}
+                >
+                  <Plus size={22} /> Combine another question
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div style={{ borderTop: "1px solid #efefef", padding: "18px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+            {canCreate && <div style={{ fontSize: 17, color: "#344054" }}>{totalVariants} variant{totalVariants === 1 ? "" : "s"}</div>}
+            <button className="glamar-btn glamar-btn-primary" disabled={!canCreate} onClick={() => onCreate(selectedOptions.map((option) => option.name))}>Create</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioPricingMappingModal({ open, options, selectedNames, onClose, onAdd }) {
+  const availableOptions = options.filter((option) => option.valueType !== "text" && countStudioOptionAnswers(option) > 0 && !selectedNames.includes(option.name));
+  const [selectedName, setSelectedName] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedName(availableOptions[0]?.name || "");
+  }, [open, options, selectedNames]);
+
+  if (!open) return null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,20,0.42)", zIndex: 1315, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: 540, maxWidth: "100%", background: "#fff", borderRadius: 24, boxShadow: "0 24px 70px rgba(20,20,20,0.2)", overflow: "hidden" }}>
+        <div style={{ padding: "28px 40px 34px" }}>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#1f1f1f", marginBottom: 30 }}>Pricing Mapping</div>
+          <div>
+            <label style={{ display: "block", fontSize: 18, color: "#5f5f5f", marginBottom: 12 }}>Option name</label>
+            <div style={{ position: "relative" }}>
+              <select style={{ ...S.select, height: 78, borderRadius: 18, fontSize: 22, fontWeight: 500 }} value={selectedName} onChange={(e) => setSelectedName(e.target.value)} disabled={availableOptions.length === 0}>
+                {!availableOptions.length && <option value="">No options available</option>}
+                {availableOptions.map((option) => <option key={option.name} value={option.name}>{option.name}</option>)}
+              </select>
+              <ChevronDown size={26} color="#667085" style={{ position: "absolute", right: 20, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+            </div>
+          </div>
+        </div>
+        <div style={{ borderTop: "1px solid #efefef", padding: "18px 28px", display: "flex", justifyContent: "space-between" }}>
+          <button className="glamar-btn glamar-btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="glamar-btn glamar-btn-primary" disabled={!selectedName} onClick={() => onAdd(selectedName)}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioMappingEmptyState({ title, description, actionLabel, onAction }) {
+  return (
+    <div style={{ minHeight: 320, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "32px 24px" }}>
+      <div style={{ width: 132, height: 132, borderRadius: "50%", background: "linear-gradient(180deg, #fafafa, #f1f1f1)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 26, position: "relative" }}>
+        <Bell size={56} color="#bfbfbf" strokeWidth={1.2} />
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: "#141414" }}>{title}</div>
+      <div style={{ maxWidth: 760, fontSize: 15, color: "#666", lineHeight: 1.55, marginTop: 18 }}>{description}</div>
+      <button className="glamar-btn glamar-btn-primary" style={{ marginTop: 30 }} onClick={onAction}>{actionLabel}</button>
+    </div>
+  );
+}
+
+function StudioVariantCombinationsPanel({
+  variantOptions,
+  setVariantOptions,
+  variants,
+  setVariants,
+  measurementSchema,
+  has3D,
+  pricingOptionNames,
+  setPricingOptionNames,
+  pricingAdjustments,
+  setPricingAdjustments,
+  basePrice,
+  setBasePrice,
+  onDirtyChange,
+}) {
+  const [showVariantModal, setShowVariantModal] = useState(false);
+  const [showPricingModal, setShowPricingModal] = useState(false);
+  const [activePricingFilter, setActivePricingFilter] = useState("all");
+  const [activeVariantFilter, setActiveVariantFilter] = useState("all");
+  const [activeVariantValueFilter, setActiveVariantValueFilter] = useState("all");
+  const [pricingSaved, setPricingSaved] = useState(false);
+  const eligibleOptions = variantOptions.filter((option) => option.valueType !== "text");
+  const skuOptions = variantOptions.filter((option) => option.optionRole === "sku" && option.valueType !== "text");
+
+  useEffect(() => {
+    setActivePricingFilter((current) => (
+      current === "all" || pricingOptionNames.includes(current)
+        ? current
+        : (pricingOptionNames[0] || "all")
+    ));
+  }, [pricingOptionNames]);
+
+  useEffect(() => {
+    setActiveVariantFilter((current) => (
+      current === "all" || skuOptions.some((option) => option.name === current)
+        ? current
+        : "all"
+    ));
+  }, [skuOptions]);
+
+  useEffect(() => {
+    setActiveVariantValueFilter("all");
+  }, [activeVariantFilter]);
+
+  useEffect(() => {
+    if (!pricingSaved) return;
+    const timer = setTimeout(() => setPricingSaved(false), 1400);
+    return () => clearTimeout(timer);
+  }, [pricingSaved]);
 
   const updateVariant = (id, key, value) => {
-    setVariants(prev => prev.map(variant => variant.id === id ? { ...variant, [key]: value } : variant));
+    setVariants((prev) => prev.map((variant) => variant.id === id ? { ...variant, [key]: value } : variant));
     onDirtyChange?.();
   };
 
-  const handleCreate = (selectedNames) => {
-    const nextOptions = variantOptions.map(option => ({
+  const handleCreateVariants = (selectedNames) => {
+    const nextOptions = variantOptions.map((option) => ({
       ...option,
       optionRole: selectedNames.includes(option.name) ? "sku" : "configurator",
     }));
     setVariantOptions(nextOptions);
     setVariants(generateStudioVariants(nextOptions, variants, measurementSchema));
-    setShowModal(false);
+    setShowVariantModal(false);
     onDirtyChange?.();
+  };
+
+  const handleAddPricingOption = (optionName) => {
+    if (!optionName) return;
+    setPricingOptionNames((prev) => prev.includes(optionName) ? prev : [...prev, optionName]);
+    setActivePricingFilter(optionName);
+    setShowPricingModal(false);
+    onDirtyChange?.();
+  };
+
+  const updatePricingAdjustment = (optionName, valueLabel, nextValue) => {
+    setPricingAdjustments((prev) => ({
+      ...prev,
+      [optionName]: {
+        ...(prev?.[optionName] || {}),
+        [valueLabel]: nextValue,
+      },
+    }));
+    onDirtyChange?.();
+  };
+
+  const pricingRows = (activePricingFilter === "all" ? pricingOptionNames : [activePricingFilter]).flatMap((optionName) => {
+    const option = eligibleOptions.find((item) => item.name === optionName);
+    if (!option) return [];
+    return (option.values || [])
+      .filter((value) => getVariantValueLabel(value).trim())
+      .map((value) => ({
+        optionName,
+        label: getVariantValueLabel(value),
+        color: value.color,
+        image: value.image,
+        additionalPrice: pricingAdjustments?.[optionName]?.[getVariantValueLabel(value)] || "",
+      }));
+  });
+
+  const renderVariantLabel = (variant) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      {(variant.attributes || []).slice(0, 2).map((attr) => (
+        attr.color
+          ? <div key={`${variant.id}-${attr.attr}-${attr.val}`} style={{ width: 18, height: 18, borderRadius: "50%", background: attr.color, border: "1px solid rgba(0,0,0,0.08)" }} />
+          : attr.image
+            ? <img key={`${variant.id}-${attr.attr}-${attr.val}`} src={attr.image} alt="" style={{ width: 20, height: 20, borderRadius: 6, objectFit: "cover" }} />
+            : null
+      ))}
+      <span style={{ fontSize: 14, color: "#1f2937", fontWeight: 500 }}>{variant.name}</span>
+    </div>
+  );
+
+  const variantValueFilters = activeVariantFilter === "all"
+    ? []
+    : Array.from(new Set(
+      variants
+        .map((variant) => (variant.attributes || []).find((attr) => attr.attr === activeVariantFilter)?.val || "")
+        .filter(Boolean)
+    ));
+  const selectedVariantValueFilter = variantValueFilters.includes(activeVariantValueFilter) ? activeVariantValueFilter : "all";
+  const filteredVariantRows = variants.filter((variant) => {
+    if (activeVariantFilter === "all") return true;
+    const activeAttr = (variant.attributes || []).find((attr) => attr.attr === activeVariantFilter);
+    if (!activeAttr) return false;
+    return selectedVariantValueFilter === "all" ? true : activeAttr.val === selectedVariantValueFilter;
+  });
+
+  const renderMeasurementHeaders = () => {
+    if (measurementSchema === "ring") {
+      return (
+        <>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Inner diameter</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Diamond ring</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Shape</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Carat size</th>
+        </>
+      );
+    }
+    if (measurementSchema === "watch") {
+      return (
+        <>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Case diameter</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Lug-to-lug</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Case thickness</th>
+          <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Strap type</th>
+        </>
+      );
+    }
+    return (
+      <>
+        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Length</th>
+        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Width</th>
+        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Height</th>
+        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Value</th>
+      </>
+    );
+  };
+
+  const renderMeasurementCells = (variant) => {
+    if (measurementSchema === "ring") {
+      return (
+        <>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 110 }} value={variant.ringInnerDiameter || ""} onChange={(e) => updateVariant(variant.id, "ringInnerDiameter", e.target.value)} placeholder="12" /></td>
+          <td style={S.td}><select style={{ ...S.select, minWidth: 120 }} value={variant.isDiamondRing || "no"} onChange={(e) => updateVariant(variant.id, "isDiamondRing", e.target.value)}><option value="yes">Yes</option><option value="no">No</option></select></td>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 120 }} value={variant.diamondShape || ""} onChange={(e) => updateVariant(variant.id, "diamondShape", e.target.value)} placeholder="Round" /></td>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 120 }} value={variant.diamondCaratSize || ""} onChange={(e) => updateVariant(variant.id, "diamondCaratSize", e.target.value)} placeholder="6.5" /></td>
+        </>
+      );
+    }
+    if (measurementSchema === "watch") {
+      return (
+        <>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 110 }} value={variant.watchCaseDiameter || ""} onChange={(e) => updateVariant(variant.id, "watchCaseDiameter", e.target.value)} placeholder="44" /></td>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 110 }} value={variant.watchLugToLug || ""} onChange={(e) => updateVariant(variant.id, "watchLugToLug", e.target.value)} placeholder="48" /></td>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 120 }} value={variant.watchCaseThickness || ""} onChange={(e) => updateVariant(variant.id, "watchCaseThickness", e.target.value)} placeholder="12" /></td>
+          <td style={S.td}><input style={{ ...S.input, minWidth: 120 }} value={variant.watchStrapType || ""} onChange={(e) => updateVariant(variant.id, "watchStrapType", e.target.value)} placeholder="Leather" /></td>
+        </>
+      );
+    }
+    return (
+      <>
+        <td style={S.td}><input style={{ ...S.input, minWidth: 100 }} value={variant.dimensionLength || ""} onChange={(e) => updateVariant(variant.id, "dimensionLength", e.target.value)} placeholder="12" /></td>
+        <td style={S.td}><input style={{ ...S.input, minWidth: 100 }} value={variant.dimensionBreadth || ""} onChange={(e) => updateVariant(variant.id, "dimensionBreadth", e.target.value)} placeholder="12" /></td>
+        <td style={S.td}><input style={{ ...S.input, minWidth: 100 }} value={variant.dimensionHeight || ""} onChange={(e) => updateVariant(variant.id, "dimensionHeight", e.target.value)} placeholder="12" /></td>
+        <td style={S.td}>
+          <div style={{ position: "relative", minWidth: 146 }}>
+            <select style={{ ...S.select, paddingRight: 36 }} value={variant.dimensionUnit || "mm"} onChange={(e) => updateVariant(variant.id, "dimensionUnit", e.target.value)}>
+              {DIMENSION_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+            <ChevronDown size={16} color="#666" style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+          </div>
+        </td>
+      </>
+    );
   };
 
   return (
     <>
       <StudioVariantCombinationsModal
-        open={showModal}
+        open={showVariantModal}
         options={variantOptions}
-        selectedNames={skuOptions.map(option => option.name)}
-        onClose={() => setShowModal(false)}
-        onCreate={handleCreate}
+        selectedNames={skuOptions.map((option) => option.name)}
+        onClose={() => setShowVariantModal(false)}
+        onCreate={handleCreateVariants}
       />
 
-      <div style={{ ...S.card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "18px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#141414" }}>Variant combinations</div>
-            <div style={{ fontSize: 12.5, color: "#8b8b8b", marginTop: 4 }}>Create SKU combinations from the selected Studio questions and manage pricing row by row.</div>
+      <StudioPricingMappingModal
+        open={showPricingModal}
+        options={variantOptions}
+        selectedNames={pricingOptionNames}
+        onClose={() => setShowPricingModal(false)}
+        onAdd={handleAddPricingOption}
+      />
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ ...S.card, overflow: "hidden" }}>
+          <div style={{ padding: "18px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#141414" }}>Pricing Mapping</div>
+            <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={() => setShowPricingModal(true)}>
+              <Plus size={14} /> Add
+            </button>
           </div>
-          <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={() => setShowModal(true)}>
-            <Plus size={14} /> Create variants
-          </button>
+
+          <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ background: "#f7f7f7", borderRadius: 22, padding: 22 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "end" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 15, fontWeight: 700, color: "#222", marginBottom: 10 }}>Base price</label>
+                  <input style={{ ...S.input, height: 62, borderRadius: 16, fontSize: 22 }} value={basePrice || ""} onChange={(e) => { setBasePrice(e.target.value); onDirtyChange?.(); }} placeholder="$ 100" />
+                </div>
+                <button className="glamar-btn glamar-btn-primary" style={{ minWidth: 132 }} onClick={() => setPricingSaved(true)}>
+                  {pricingSaved ? "Saved" : "Save"}
+                </button>
+              </div>
+            </div>
+
+            {pricingOptionNames.length === 0 ? (
+              <div style={{ fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
+                Add an option name to map additional pricing against its values. Base price will apply to the product, and each selected option value can add an extra amount on top.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                  <button onClick={() => setActivePricingFilter("all")} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: `1px dashed ${activePricingFilter === "all" ? "#da0e64" : "#d4d4d4"}`, background: activePricingFilter === "all" ? "#fff0f6" : "#fff", color: activePricingFilter === "all" ? "#8f0941" : "#555", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>All</button>
+                  {pricingOptionNames.map((optionName) => (
+                    <button key={optionName} onClick={() => setActivePricingFilter(optionName)} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: `1px solid ${activePricingFilter === optionName ? "#da0e64" : "#d4d4d4"}`, background: activePricingFilter === optionName ? "#fff0f6" : "#fff", color: activePricingFilter === optionName ? "#8f0941" : "#555", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>{optionName}</button>
+                  ))}
+                  <button onClick={() => setShowPricingModal(true)} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "1px solid #d4d4d4", background: "#fff", color: "#555", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Plus size={16} /> More
+                  </button>
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+                        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Variant</th>
+                        <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Additional Pricing</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pricingRows.map((row) => (
+                        <tr key={`${row.optionName}-${row.label}`} style={{ borderBottom: "1px solid #f4f4f4" }}>
+                          <td style={S.td}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              {row.color && <div style={{ width: 18, height: 18, borderRadius: "50%", background: row.color, border: "1px solid rgba(0,0,0,0.08)" }} />}
+                              {row.image && <img src={row.image} alt="" style={{ width: 20, height: 20, borderRadius: 6, objectFit: "cover" }} />}
+                              <span style={{ fontWeight: 500, color: "#1f2937" }}>{row.label}</span>
+                              {activePricingFilter === "all" && <span style={{ fontSize: 11.5, color: "#888", border: "1px solid #e5e7eb", borderRadius: 999, padding: "3px 8px" }}>{row.optionName}</span>}
+                            </div>
+                          </td>
+                          <td style={S.td}>
+                            <input
+                              style={{ ...S.input, minWidth: 220 }}
+                              value={row.additionalPrice}
+                              onChange={(e) => updatePricingAdjustment(row.optionName, row.label, e.target.value)}
+                              placeholder="Placeholder Text"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
-        {skuOptions.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
-            No variant-generating questions selected yet. Use “Create variants” to pick the color or image questions that should build SKU combinations.
+        <div style={{ ...S.card, overflow: "hidden" }}>
+          <div style={{ padding: "18px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#141414" }}>Variant Mapping</div>
+            <button className="glamar-btn glamar-btn-primary" style={{ height: 38 }} onClick={() => setShowVariantModal(true)}>
+              {variants.length > 0 ? "Edit" : "Select Variant"}
+            </button>
           </div>
-        ) : variants.length === 0 ? (
-          <div style={{ padding: 24, fontSize: 13.5, color: "#8b8b8b", lineHeight: 1.6 }}>
-            The selected questions are ready, but there are no generated rows yet. Create the combinations to populate the table.
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
-                  {skuOptions.map(option => (
-                    <th key={option.name} style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>{option.name}</th>
-                  ))}
-                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>SKU ID</th>
-                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Cost Price</th>
-                  <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Selling Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {variants.map(variant => (
-                  <tr key={variant.id} style={{ borderBottom: "1px solid #f5f5f5" }}>
-                    {skuOptions.map(option => {
-                      const attr = variant.attributes?.find(attribute => attribute.attr === option.name);
-                      return (
-                        <td key={`${variant.id}-${option.name}`} style={S.td}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            {attr?.color && <div style={{ width: 18, height: 18, borderRadius: "50%", background: attr.color, border: "1px solid rgba(0,0,0,0.08)" }} />}
-                            {attr?.image && <img src={attr.image} alt="" style={{ width: 20, height: 20, borderRadius: 6, objectFit: "cover" }} />}
-                            <span>{attr?.val || "—"}</span>
-                          </div>
-                        </td>
-                      );
-                    })}
-                    <td style={S.td}>
-                      <input style={{ ...S.input, minWidth: 140 }} value={variant.variantId || ""} onChange={e => updateVariant(variant.id, "variantId", e.target.value)} placeholder="SKU ID" />
-                    </td>
-                    <td style={S.td}>
-                      <input style={{ ...S.input, minWidth: 140 }} value={variant.costPrice || ""} onChange={e => updateVariant(variant.id, "costPrice", e.target.value)} placeholder="Rs. 0.00" />
-                    </td>
-                    <td style={S.td}>
-                      <input style={{ ...S.input, minWidth: 140 }} value={variant.sellingPrice || ""} onChange={e => updateVariant(variant.id, "sellingPrice", e.target.value)} placeholder="Rs. 0.00" />
-                    </td>
-                  </tr>
+
+          {skuOptions.length === 0 || variants.length === 0 ? (
+            <StudioMappingEmptyState
+              title="Map Variant"
+              description="Your product inventory is empty. Add your first item to unlock virtual try-ons, 3D views, and immersive experiences for your customers."
+              actionLabel="Select Variant"
+              onAction={() => setShowVariantModal(true)}
+            />
+          ) : (
+            <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                <button onClick={() => { setActiveVariantFilter("all"); setActiveVariantValueFilter("all"); }} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: `1px dashed ${activeVariantFilter === "all" ? "#da0e64" : "#d4d4d4"}`, background: activeVariantFilter === "all" ? "#fff0f6" : "#fff", color: activeVariantFilter === "all" ? "#8f0941" : "#555", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>All</button>
+                {skuOptions.map((option) => (
+                  <button key={option.name} onClick={() => { setActiveVariantFilter(option.name); setActiveVariantValueFilter("all"); }} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: `1px solid ${activeVariantFilter === option.name ? "#da0e64" : "#d4d4d4"}`, background: activeVariantFilter === option.name ? "#fff0f6" : "#fff", color: activeVariantFilter === option.name ? "#8f0941" : "#555", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>{option.name}</button>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                <button onClick={() => setShowVariantModal(true)} style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "1px solid #d4d4d4", background: "#fff", color: "#555", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <Plus size={16} /> More
+                </button>
+              </div>
+              {activeVariantFilter !== "all" && variantValueFilters.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                  <button onClick={() => setActiveVariantValueFilter("all")} style={{ height: 40, padding: "0 16px", borderRadius: 999, border: `1px dashed ${selectedVariantValueFilter === "all" ? "#da0e64" : "#d4d4d4"}`, background: selectedVariantValueFilter === "all" ? "#fff0f6" : "#fff", color: selectedVariantValueFilter === "all" ? "#8f0941" : "#555", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>All values</button>
+                  {variantValueFilters.map((valueLabel) => (
+                    <button key={`${activeVariantFilter}-${valueLabel}`} onClick={() => setActiveVariantValueFilter(valueLabel)} style={{ height: 40, padding: "0 16px", borderRadius: 999, border: `1px solid ${selectedVariantValueFilter === valueLabel ? "#da0e64" : "#d4d4d4"}`, background: selectedVariantValueFilter === valueLabel ? "#fff0f6" : "#fff", color: selectedVariantValueFilter === valueLabel ? "#8f0941" : "#555", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{valueLabel}</button>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>Variant</th>
+                      <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>SKU ID</th>
+                      {renderMeasurementHeaders()}
+                      {has3D && <th style={{ ...S.th, textTransform: "none", fontSize: 12, letterSpacing: 0 }}>3D file</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredVariantRows.map((variant) => (
+                      <tr key={variant.id} style={{ borderBottom: "1px solid #f4f4f4" }}>
+                        <td style={S.td}>{renderVariantLabel(variant)}</td>
+                        <td style={S.td}>
+                          <input style={{ ...S.input, minWidth: 150 }} value={variant.variantId || ""} onChange={(e) => updateVariant(variant.id, "variantId", e.target.value)} placeholder="001" />
+                        </td>
+                        {renderMeasurementCells(variant)}
+                        {has3D && (
+                          <td style={S.td}>
+                            <button style={{ width: 68, height: 64, borderRadius: 16, border: "1px dashed #f472b6", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <Upload size={16} color="#8f0941" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
@@ -4253,6 +5225,7 @@ function StudioWorkspace({
   const [previewTab, setPreviewTab] = useState("3d");
   const [isDirty, setIsDirty] = useState(startDirty);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showAddOptionModal, setShowAddOptionModal] = useState(false);
 
   useEffect(() => {
     setDraftProduct({
@@ -4273,6 +5246,7 @@ function StudioWorkspace({
     setRightTab("configurator");
     setPreviewTab("3d");
     setIsDirty(startDirty);
+    setShowAddOptionModal(false);
   }, [product, startDirty]);
 
   useEffect(() => {
@@ -4291,26 +5265,22 @@ function StudioWorkspace({
 
   const markDirty = () => setIsDirty(true);
 
-  const updateDraftProduct = (patch) => {
-    setDraftProduct(prev => ({ ...prev, ...patch }));
-    markDirty();
-  };
-
   const updateQuestionAt = (index, nextQuestion) => {
     setDraftProduct(prev => ({ ...prev, variantOptions: prev.variantOptions.map((question, questionIndex) => questionIndex === index ? nextQuestion : question) }));
     markDirty();
   };
 
   const addQuestion = () => {
-    const nextQuestion = ensureStudioVariantOptions([{
-      name: `Question ${draftProduct.variantOptions.length + 1}`,
-      valueType: "color",
-      optionRole: "configurator",
-      values: [],
-    }])[0];
-    setDraftProduct(prev => ({ ...prev, variantOptions: [...(prev.variantOptions || []), nextQuestion] }));
-    setSelectedPanel({ type: "question", index: draftProduct.variantOptions.length });
+    setShowAddOptionModal(true);
+  };
+
+  const handleAddQuestion = (nextQuestion) => {
+    const normalizedQuestion = ensureStudioVariantOptions([nextQuestion])[0];
+    const nextIndex = draftProduct.variantOptions.length;
+    setDraftProduct(prev => ({ ...prev, variantOptions: [...(prev.variantOptions || []), normalizedQuestion] }));
+    setSelectedPanel({ type: "question", index: nextIndex });
     setRightTab("configurator");
+    setShowAddOptionModal(false);
     markDirty();
   };
 
@@ -4320,7 +5290,18 @@ function StudioWorkspace({
     const nextVariants = removedQuestion?.optionRole === "sku"
       ? generateStudioVariants(nextOptions, draftProduct.variants, measurementSchema)
       : draftProduct.variants;
-    setDraftProduct(prev => ({ ...prev, variantOptions: nextOptions, variants: nextVariants }));
+    setDraftProduct(prev => {
+      const nextPricingOptionNames = (prev.pricingOptionNames || []).filter((name) => name !== removedQuestion?.name);
+      const nextPricingAdjustments = { ...(prev.pricingAdjustments || {}) };
+      if (removedQuestion?.name) delete nextPricingAdjustments[removedQuestion.name];
+      return {
+        ...prev,
+        variantOptions: nextOptions,
+        variants: nextVariants,
+        pricingOptionNames: nextPricingOptionNames,
+        pricingAdjustments: nextPricingAdjustments,
+      };
+    });
     setSelectedPanel(nextOptions.length > 0 ? { type: "question", index: Math.max(0, index - 1) } : { type: "variants" });
     markDirty();
   };
@@ -4331,6 +5312,8 @@ function StudioWorkspace({
       ...nextProduct,
       variantOptions: prev.variantOptions,
       variants: prev.variants,
+      pricingAdjustments: prev.pricingAdjustments || {},
+      pricingOptionNames: prev.pricingOptionNames || [],
       arSettings: prev.arSettings,
     }));
     setShowEditModal(false);
@@ -4353,12 +5336,17 @@ function StudioWorkspace({
       const variantMeasurement = buildMeasurement(measurementSchema, variant);
       const dimension = variantMeasurement.dimension || formMeasurement.dimension || "";
       const measurements = variantMeasurement.dimension ? variantMeasurement.measurements : formMeasurement.measurements;
+      const additionalPrice = (draftProduct.pricingOptionNames || []).length
+        ? getVariantAdditionalPriceFromMappings(variant, draftProduct.pricingAdjustments || {})
+        : (variant.additionalPrice || "");
+      const sellingPrice = getVariantSellingPrice(setupForm.sellingPrice || "", additionalPrice, variant.sellingPrice || variant.price || "");
       return {
         ...variant,
         id: variant.id || `var-${Date.now()}-${index}`,
         name: variant.name || (variant.attributes || []).map(attr => attr.val).join(" / ") || `Variant ${index + 1}`,
-        price: variant.sellingPrice || variant.price || "",
-        sellingPrice: variant.sellingPrice || variant.price || "",
+        additionalPrice,
+        price: sellingPrice,
+        sellingPrice,
         costPrice: variant.costPrice || "",
         dimension,
         measurements,
@@ -4377,6 +5365,8 @@ function StudioWorkspace({
       measurements: formMeasurement.measurements,
       variantOptions: ensureStudioVariantOptions(draftProduct.variantOptions || []),
       variants: nextVariants,
+      pricingAdjustments: draftProduct.pricingAdjustments || {},
+      pricingOptionNames: draftProduct.pricingOptionNames || [],
       arSettings: draftProduct.arSettings || {},
       media: draftProduct.media || {},
       status: draftProduct.status || "inactive",
@@ -4394,6 +5384,12 @@ function StudioWorkspace({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <StudioVariantOptionModal
+        open={showAddOptionModal}
+        onClose={() => setShowAddOptionModal(false)}
+        onSave={handleAddQuestion}
+      />
+
       <StudioCreateProductModal
         open={showEditModal}
         headCategory={headCategory}
@@ -4474,8 +5470,8 @@ function StudioWorkspace({
                   style={{ width: "100%", border: `1px solid ${selectedPanel.type === "variants" ? "#8f0941" : "#ededed"}`, background: selectedPanel.type === "variants" ? "#fff5fb" : "#fff", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", textAlign: "left" }}
                 >
                   <div>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "#141414" }}>Variant combinations</div>
-                    <div style={{ fontSize: 12, color: "#8b8b8b", marginTop: 4 }}>{draftProduct.variants?.length || 0} rows</div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "#141414" }}>Mappings</div>
+                    <div style={{ fontSize: 12, color: "#8b8b8b", marginTop: 4 }}>{draftProduct.variants?.length || 0} variant rows</div>
                   </div>
                   <Tag size={16} color="#555" />
                 </button>
@@ -4520,6 +5516,13 @@ function StudioWorkspace({
                       variants={draftProduct.variants || []}
                       setVariants={(nextVariants) => setDraftProduct(prev => ({ ...prev, variants: nextVariants }))}
                       measurementSchema={measurementSchema}
+                      has3D={has3D}
+                      pricingOptionNames={draftProduct.pricingOptionNames || []}
+                      setPricingOptionNames={(nextNames) => setDraftProduct(prev => ({ ...prev, pricingOptionNames: typeof nextNames === "function" ? nextNames(prev.pricingOptionNames || []) : nextNames }))}
+                      pricingAdjustments={draftProduct.pricingAdjustments || {}}
+                      setPricingAdjustments={(nextAdjustments) => setDraftProduct(prev => ({ ...prev, pricingAdjustments: typeof nextAdjustments === "function" ? nextAdjustments(prev.pricingAdjustments || {}) : nextAdjustments }))}
+                      basePrice={setupForm.sellingPrice || ""}
+                      setBasePrice={(nextValue) => setSetupForm(prev => ({ ...prev, sellingPrice: nextValue }))}
                       onDirtyChange={markDirty}
                     />
                   ) : (
@@ -4582,7 +5585,7 @@ function ProductDetail({ product, headCategory, onBack, onPrev, onNext, onEditPr
       <ProductFlowHeader title={product.name} tag={headCategory} onBack={onBack} showSecondary={false} primaryLabel="Save" onPrimary={onBack} showPrimary={showSaveCta} />
 
       <div style={{ flex: 1, overflow: "hidden", padding: "20px 24px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "264px 1fr 284px", gap: 18, height: "100%" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "264px 1fr 320px", gap: 18, height: "100%" }}>
 
           {/* ── Left: Product details + Variants ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
