@@ -1,0 +1,149 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ddd;
+  border-radius: 3px;
+}
+
+.glamar-btn,
+.glamar-btn * {
+  box-sizing: border-box;
+}
+
+.glamar-btn {
+  appearance: none;
+  border-radius: 999px;
+  height: 42px;
+  padding: 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.glamar-btn:focus-visible {
+  outline: 2px solid rgba(143, 9, 65, 0.22);
+  outline-offset: 2px;
+}
+
+.glamar-btn-primary {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 16px;
+  gap: 6px;
+  border-radius: 999px;
+  border: none;
+  background: rgb(218, 14, 100);
+  color: rgb(255, 255, 255);
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 16px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.glamar-btn-primary:hover:not(:disabled) {
+  background: #8f0941;
+}
+
+.glamar-btn-primary:active:not(:disabled) {
+  background: #520525;
+  color: #ff99c4;
+}
+
+.glamar-btn-primary:disabled {
+  background: #ffa1c8;
+  color: #ffffff;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.glamar-btn-secondary {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 16px;
+  gap: 6px;
+  background: #ffffff;
+  color: #8f0941;
+  border: 1px solid #e0e0e0;
+  border-radius: 999px;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.glamar-btn-secondary:hover:not(:disabled) {
+  background: #fcebf4;
+  color: #8f0941;
+  border-color: #e0e0e0;
+}
+
+.glamar-btn-secondary:active:not(:disabled) {
+  background: #fadce9;
+  color: #520525;
+  border-color: #e0e0e0;
+}
+
+.glamar-btn-secondary:disabled {
+  background: #ffffff;
+  color: #ffa1c8;
+  border-color: #e0e0e0;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+input:focus,
+select:focus {
+  border-color: #f43f5e !important;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #141414;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #141414;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
